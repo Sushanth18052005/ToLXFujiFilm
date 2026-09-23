@@ -38,8 +38,3 @@ services:
         sync: false                    # Brevo dashboard → SMTP & API → API Keys (keep secret)
       - key: MAIL_FROM
         sync: false                    # a Brevo-verified sender, e.g. "Traces of Lenses × Fujifilm <you@gmail.com>"
-      # SEED_DATA is optional and usually NOT needed with Neon: import directly into
-      # the shared Neon DB from your machine and the server reads the same rows.
-      # Only set it if you want the server to seed an empty DB on first boot.
-      # - key: SEED_DATA
-      #   sync: false                  # paste contents of data/seed.b64.txt

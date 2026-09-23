@@ -7,11 +7,6 @@ data/*.db-shm
 data/*.xlsx
 data/*.xls
 data/*.csv
-# seed data contains attendee entry tokens — never commit it to a public repo.
-# Load it on the server via the SEED_DATA env var instead (see README).
-data/seed.json
-data/seed.b64.txt
-qrcodes/
 *.log
 .DS_Store
 

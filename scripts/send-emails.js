@@ -1,5 +1,5 @@
 'use strict';
-// Email each attendee their personal QR code via SMTP.
+// Email each attendee their personal QR code via Brevo's transactional HTTP API.
 // By default only emails people who haven't been emailed yet.
 //
 //   npm run send                 # only un-emailed attendees

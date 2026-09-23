@@ -290,11 +290,12 @@ app.post(
   }
 );
 
-// Background email send job. Sending is a serial SMTP loop that can take minutes
-// for a big list; awaiting it inside the request makes Render's proxy time out and
-// return an HTML error page (the admin page then chokes on "Unexpected token '<'").
-// So we kick the send off in the background and let the admin page poll
-// /api/send/status. Single shared staff role + single instance ⇒ one job at a time.
+// Background email send job. Sending is a serial loop (one Brevo API call per
+// attendee) that can take minutes for a big list; awaiting it inside the request
+// makes Render's proxy time out and return an HTML error page (the admin page then
+// chokes on "Unexpected token '<'"). So we kick the send off in the background and
+// let the admin page poll /api/send/status. Single shared staff role + single
+// instance ⇒ one job at a time.
 let sendJob = {
   running: false, done: false, startedAt: null, finishedAt: null,
   total: 0, sent: 0, failed: 0, errors: [], last: null, error: null, resend: false,
@@ -328,8 +329,8 @@ function runSendJob({ resend }) {
 }
 
 // Email attendees their QR from the admin page. Body: { resend, dryRun }.
-// dryRun answers synchronously (a DB query only, no SMTP); a real send starts a
-// background job and returns 202 — progress is read from /api/send/status.
+// dryRun answers synchronously (a DB query only, no email sent); a real send starts
+// a background job and returns 202 — progress is read from /api/send/status.
 app.post('/api/send', session.requireStaff, async (req, res) => {
   const resend = !!(req.body && req.body.resend);
   const dryRun = !!(req.body && req.body.dryRun);
@@ -369,7 +370,7 @@ if (!config.staffPassword) {
 // ---------- startup ----------
 (async () => {
   try {
-    await init(); // create schema (idempotent) and seed if empty
+    await init(); // create schema (idempotent)
   } catch (err) {
     console.error('FATAL: could not initialize the database:', err.message);
     process.exit(1);

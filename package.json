@@ -8,16 +8,13 @@
     "start": "node server.js",
     "init-db": "node scripts/init-db.js",
     "template": "node scripts/make-template.js",
-    "export-seed": "node scripts/export-seed.js",
     "import": "node scripts/import.js",
-    "qrs": "node scripts/generate-qrs.js",
     "send": "node scripts/send-emails.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
-    "nodemailer": "^10.0.10",
     "pg": "^8.23.0",
     "qrcode": "^1.5.4"
   },
