@@ -72,7 +72,7 @@ function esc(s) {
 function loginPage(next, error) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Staff Access — ${esc(config.eventName)}</title>
+<title> ${esc(config.eventName)}</title>
 <link rel="stylesheet" href="/styles.css"></head>
 <body class="center">
   <div class="login">
