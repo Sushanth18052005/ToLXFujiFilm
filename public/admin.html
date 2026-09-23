@@ -55,7 +55,31 @@
       <pre id="log" class="muted" style="display:none;white-space:pre-wrap;font-size:12px;margin:12px 0 0;max-height:200px;overflow:auto"></pre>
     </div>
 
-    <input id="q" placeholder="Search by name or email…" style="width:100%;margin:8px 0 16px">
+    <input id="q" placeholder="Search by name or email…" style="width:100%;margin:8px 0 10px">
+
+    <div class="controls" style="margin-bottom:12px">
+      <select id="fStatus" onchange="loadList()" style="flex:1;min-width:130px">
+        <option value="">All statuses</option>
+        <option value="registered">Registered</option>
+        <option value="entered">Entered</option>
+      </select>
+      <select id="fEmailed" onchange="loadList()" style="flex:1;min-width:130px">
+        <option value="">Any email status</option>
+        <option value="no">Not emailed</option>
+        <option value="yes">Emailed</option>
+      </select>
+    </div>
+
+    <div id="selbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <label class="muted" style="flex-direction:row;align-items:center;gap:8px;margin:0;font-size:13px;letter-spacing:.04em">
+        <input type="checkbox" id="selAll" onchange="toggleAll(this.checked)"> select all shown
+      </label>
+      <span class="muted" id="selCount" style="font-size:12px;letter-spacing:.03em">0 selected</span>
+      <span style="flex:1"></span>
+      <button class="ghost btn-sm" id="selPreviewBtn" onclick="doSendSelected(true)" disabled>Preview selected</button>
+      <button class="btn-sm" id="selSendBtn" onclick="doSendSelected(false)" disabled>Email selected</button>
+    </div>
+
     <div id="list"></div>
   </div>
 
@@ -65,6 +89,13 @@
     const qEl = document.getElementById('q');
     const logEl = document.getElementById('log');
     const fileEl = document.getElementById('file');
+
+    // Ids the user has ticked to email individually. A Set (not the DOM) is the
+    // source of truth so the selection survives the 15s auto-refresh and search
+    // re-renders. Scoped to the whole session, not just the current filter view.
+    const selected = new Set();
+    let shownIds = [];   // ids currently rendered (drives "select all shown")
+    let busy = false;    // an import/send/etc. is running — disables action buttons
 
     function esc(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
@@ -76,12 +107,12 @@
       logEl.textContent = msg;
     }
 
-    function setBusy(busy) {
-      document.getElementById('importBtn').disabled = busy;
-      document.getElementById('sendBtn').disabled = busy;
-      document.getElementById('dryBtn').disabled = busy;
-      document.getElementById('addBtn').disabled = busy;
-      document.getElementById('exportBtn').disabled = busy;
+    function setBusy(b) {
+      busy = b;
+      for (const id of ['importBtn', 'sendBtn', 'dryBtn', 'addBtn', 'exportBtn']) {
+        document.getElementById(id).disabled = b;
+      }
+      updateSelUI(); // re-derive the selection buttons' enabled state
     }
 
     // Read a response as JSON, but fail with a clear message if the body is an
@@ -245,31 +276,124 @@
       const r = await fetch('/api/stats');
       if (r.status === 401) return location.href = '/login';
       const s = await r.json();
-      statsEl.textContent = `${s.entered} entered · ${s.remaining} remaining · ${s.total} total`;
+      statsEl.textContent = `${s.entered} entered · ${s.emailed} emailed · ${s.remaining} remaining · ${s.total} total`;
     }
 
     async function loadList() {
-      const r = await fetch('/api/attendees?q=' + encodeURIComponent(qEl.value));
+      const params = new URLSearchParams();
+      if (qEl.value) params.set('q', qEl.value);
+      const st = document.getElementById('fStatus').value;
+      const em = document.getElementById('fEmailed').value;
+      if (st) params.set('status', st);
+      if (em) params.set('emailed', em);
+      const r = await fetch('/api/attendees?' + params.toString());
       if (r.status === 401) return location.href = '/login';
       const rows = await r.json();
-      listEl.innerHTML = rows.map(a => `
+      shownIds = rows.map(a => a.id);
+      listEl.innerHTML = rows.map(a => {
+        const checked = selected.has(a.id) ? ' checked' : '';
+        const emailBadge = a.email
+          ? (a.email_sent_at
+              ? `<span class="badge emailed" title="Emailed ${esc(a.email_sent_at)} IST">emailed</span>`
+              : '<span class="badge notsent">not sent</span>')
+          : '';
+        const meta = [
+          a.email ? esc(a.email) : 'no email',
+          a.entered_at ? esc(a.entered_at) + ' IST' : null,
+        ].filter(Boolean).join(' · ');
+        return `
         <div class="row">
-          <div>
-            <div>${esc(a.name)}</div>
-            <div class="muted" style="font-size:12px">${esc(a.email || '')}${a.entered_at ? ' · ' + esc(a.entered_at) + ' IST' : ''}</div>
+          <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <input type="checkbox" class="sel" data-id="${a.id}"${checked} aria-label="Select ${esc(a.name)}">
+            <div style="min-width:0">
+              <div>${esc(a.name)}</div>
+              <div class="muted" style="font-size:12px">${meta}</div>
+            </div>
           </div>
-          <div style="display:flex;align-items:center;gap:8px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            ${emailBadge}
             <span class="badge ${a.status}">${a.status}</span>
             ${a.status === 'entered' ? `<button class="ghost btn-sm" onclick="undo(${a.id})">Undo</button>` : ''}
             <button class="ghost btn-sm" onclick="delAttendee(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Delete</button>
           </div>
-        </div>`).join('') || '<p class="muted">No matches.</p>';
+        </div>`;
+      }).join('') || '<p class="muted">No matches.</p>';
+      updateSelUI();
     }
 
     async function undo(id) {
       if (!confirm('Undo this entry so the person can check in again?')) return;
       await fetch('/api/attendees/' + id + '/undo', { method: 'POST' });
       loadStats(); loadList();
+    }
+
+    // --- individual selection ("email these specific people") ---
+    function updateSelUI() {
+      const n = selected.size;
+      document.getElementById('selCount').textContent =
+        n + ' selected' + (n ? ' — sends even if already emailed' : '');
+      document.getElementById('selPreviewBtn').disabled = busy || n === 0;
+      document.getElementById('selSendBtn').disabled = busy || n === 0;
+      const selAll = document.getElementById('selAll');
+      const shownSel = shownIds.filter(id => selected.has(id)).length;
+      selAll.checked = shownIds.length > 0 && shownSel === shownIds.length;
+      selAll.indeterminate = shownSel > 0 && shownSel < shownIds.length;
+    }
+
+    function toggleAll(check) {
+      for (const id of shownIds) { if (check) selected.add(id); else selected.delete(id); }
+      listEl.querySelectorAll('.sel').forEach(cb => { cb.checked = check; });
+      updateSelUI();
+    }
+
+    // Checkboxes are re-created on every reload, so track them by delegation.
+    listEl.addEventListener('change', (e) => {
+      const cb = e.target.closest('.sel');
+      if (!cb) return;
+      const id = parseInt(cb.dataset.id, 10);
+      if (cb.checked) selected.add(id); else selected.delete(id);
+      updateSelUI();
+    });
+
+    async function doSendSelected(dryRun) {
+      const ids = [...selected];
+      if (!ids.length) return alert('Tick at least one person to email.');
+      if (!dryRun && !confirm('Email the ' + ids.length + ' selected '
+          + (ids.length === 1 ? 'person' : 'people')
+          + ' their QR?\n\nSelected people are sent even if they were already emailed.')) return;
+      setBusy(true);
+      log(dryRun ? 'Checking selected recipients…' : 'Starting send to selected…');
+      try {
+        const r = await fetch('/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids, dryRun }),
+        });
+        if (r.status === 401) return location.href = '/login';
+
+        if (dryRun) {
+          const d = await parseJson(r);
+          if (!r.ok) { log('Preview failed: ' + (d.error || r.status)); return; }
+          const recips = d.recipients || [];
+          const skipped = ids.length - recips.length;
+          const lines = recips.map(x => '  ' + x.name + ' <' + (x.email || '') + '>');
+          log(`[dry run] ${recips.length} of ${ids.length} selected will be emailed`
+            + (skipped ? ` (${skipped} skipped — no email address)` : '')
+            + (recips.length ? ':\n' + lines.join('\n') : '.'));
+          return;
+        }
+
+        const d = await parseJson(r);
+        if (r.status === 409) log('A send is already in progress — tracking it…');
+        else if (!r.ok) { log('Send failed: ' + (d.error || r.status)); return; }
+        await pollSend();
+        selected.clear();
+        loadList();
+      } catch (e) {
+        log('Send error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
     }
 
     let t;

@@ -206,14 +206,25 @@ app.get('/api/stats', session.requireStaff, async (req, res) => {
 
 app.get('/api/attendees', session.requireStaff, async (req, res) => {
   const q = `%${String(req.query.q || '').toLowerCase()}%`;
+  const status = String(req.query.status || '');
+  const emailed = String(req.query.emailed || '');
+  const params = [q, q];
+  const where = [`(lower(name) LIKE $1 OR lower(COALESCE(email,'')) LIKE $2)`];
+  if (status === 'entered' || status === 'registered') {
+    params.push(status);
+    where.push(`status = $${params.length}`);
+  }
+  if (emailed === 'yes') where.push(`email_sent_at IS NOT NULL`);
+  else if (emailed === 'no') where.push(`email_sent_at IS NULL`);
   try {
     const { rows } = await query(
       `SELECT id, name, email, status,
-         to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at
+         to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at,
+         to_char(email_sent_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS email_sent_at
        FROM attendees
-       WHERE lower(name) LIKE $1 OR lower(COALESCE(email,'')) LIKE $2
+       WHERE ${where.join(' AND ')}
        ORDER BY entered_at DESC NULLS LAST, name LIMIT 200`,
-      [q, q]
+      params
     );
     res.json(rows);
   } catch (err) {
@@ -319,13 +330,14 @@ let sendJob = {
   total: 0, sent: 0, failed: 0, errors: [], last: null, error: null, resend: false,
 };
 
-function runSendJob({ resend }) {
+function runSendJob({ resend, ids }) {
   sendJob = {
     running: true, done: false, startedAt: Date.now(), finishedAt: null,
     total: 0, sent: 0, failed: 0, errors: [], last: null, error: null, resend,
   };
   sendEmails({
     resend,
+    ids,
     onProgress: ({ sent, total, name }) => {
       sendJob.sent = sent;
       sendJob.total = total;
@@ -346,16 +358,21 @@ function runSendJob({ resend }) {
   });
 }
 
-// Email attendees their QR from the admin page. Body: { resend, dryRun }.
+// Email attendees their QR from the admin page. Body: { resend, dryRun, ids? }.
 // dryRun answers synchronously (a DB query only, no email sent); a real send starts
 // a background job and returns 202 — progress is read from /api/send/status.
+// When `ids` is present, only those attendees are targeted (and they are (re)sent
+// regardless of whether they were emailed before).
 app.post('/api/send', session.requireStaff, async (req, res) => {
   const resend = !!(req.body && req.body.resend);
   const dryRun = !!(req.body && req.body.dryRun);
+  const ids = Array.isArray(req.body && req.body.ids)
+    ? req.body.ids.map((n) => parseInt(n, 10)).filter(Number.isInteger)
+    : null;
 
   if (dryRun) {
     try {
-      res.json(await sendEmails({ resend, dryRun: true }));
+      res.json(await sendEmails({ resend, dryRun: true, ids }));
     } catch (err) {
       console.error('send dry-run error:', err.message);
       res.status(500).json({ error: err.message });
@@ -366,7 +383,7 @@ app.post('/api/send', session.requireStaff, async (req, res) => {
   if (sendJob.running) {
     return res.status(409).json({ error: 'A send is already in progress.', status: sendJob });
   }
-  runSendJob({ resend });
+  runSendJob({ resend, ids });
   res.status(202).json({ started: true });
 });
 
