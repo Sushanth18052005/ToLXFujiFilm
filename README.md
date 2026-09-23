@@ -59,23 +59,65 @@ tokens (matched by email, or by name when there's no email).
 Staff can also just use their phone's native camera: scanning the QR opens the
 scan URL directly, which verifies the code after a one-time staff login.
 
-## Deployment notes
+## Deploying to Render
 
-- Serve over **HTTPS** (Render, Railway, Fly, or Nginx/Caddy in front). Set
-  `TRUST_PROXY=1` when behind a TLS-terminating proxy so secure cookies work.
-- SQLite lives in `./data/entry.db`. Back it up (or use a persistent volume) so
-  check-in state survives restarts.
-- This is a single-instance app (in-process SQLite + login throttle). Run one
-  instance; don't scale to multiple replicas without moving to a shared DB.
+The server and your local machine must use the **same tokens**, or the QRs you
+email won't verify at the door. The flow: prepare data locally, ship a seed file,
+and let the deployed server load it on first boot.
+
+**1. Prepare data locally** (once your real list is imported):
+
+```bash
+npm run export-seed     # writes data/seed.json + data/seed.b64.txt
+```
+
+Both files hold entry tokens and are **gitignored** — never commit them to a
+public repo. You'll load them on the server via an env var in step 2.
+
+**2. Create the service on Render:**
+
+- Push this repo to GitHub, then in Render: **New + → Blueprint**, point it at the
+  repo. `render.yaml` provisions a Node web service with a 1 GB persistent disk.
+- Set the `sync: false` env vars in the dashboard: `STAFF_PASSWORD`, `EVENT_NAME`,
+  and (after the first deploy gives you a URL) `BASE_URL` = `https://<name>.onrender.com`.
+- Set **`SEED_DATA`** to the full contents of `data/seed.b64.txt`. On first boot the
+  server decodes it and seeds the DB with the exact tokens from your machine.
+  (Alternative, only if your repo is **private**: un-ignore `data/seed.json`, commit
+  it, and skip `SEED_DATA` — the server falls back to the committed file.)
+- Redeploy after setting `BASE_URL`. Entry status always starts fresh.
+
+**3. Generate QRs / emails pointing at the live URL** (back on your machine):
+
+```bash
+BASE_URL=https://<name>.onrender.com npm run qrs      # or: npm run send
+```
+
+The tokens already match the server, so these QRs verify correctly at the door.
+
+### Persistence — important
+
+- The `disk:` block in `render.yaml` needs Render's **Starter plan ($7/mo)**. With
+  it, the SQLite DB (and everyone's Entered status) survives restarts and
+  redeploys. You can cancel after the event.
+- On the **free plan** you must delete the `disk:` block and set `DB_FILE` back to
+  the default. Then the filesystem is ephemeral: any restart wipes entry state
+  (re-seeding everyone to "not entered"), and the service sleeps after 15 min idle
+  (cold start on the first scan). Fine for testing, risky for a live door.
+- Run a **single instance** (in-process SQLite). Don't scale to multiple replicas.
+- To reload an updated attendee list after go-live, the DB is no longer empty so it
+  won't auto-reseed — clear the disk's `entry.db` (or re-import) first.
 
 ## Files
 
 | Path | Purpose |
 |------|---------|
+| `scripts/make-template.js` | Writes a blank registration template |
 | `scripts/import.js` | Excel → DB, assigns tokens |
+| `scripts/export-seed.js` | Dumps attendees+tokens to `data/seed.json` for deploy |
 | `scripts/generate-qrs.js` | Writes QR PNGs to `./qrcodes` |
 | `scripts/send-emails.js` | Emails each attendee their QR |
 | `server.js` | Entrance web app (scanner, verify API, dashboard) |
-| `lib/db.js` | SQLite schema + token generator |
+| `lib/db.js` | SQLite schema, token generator, seed-on-boot |
 | `lib/session.js` | Staff login / signed cookie |
+| `render.yaml` | Render Blueprint (web service + persistent disk) |
 | `public/` | Scanner + dashboard front-end |

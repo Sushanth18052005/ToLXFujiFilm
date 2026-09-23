@@ -8,6 +8,7 @@
     "start": "node server.js",
     "init-db": "node scripts/init-db.js",
     "template": "node scripts/make-template.js",
+    "export-seed": "node scripts/export-seed.js",
     "import": "node scripts/import.js",
     "qrs": "node scripts/generate-qrs.js",
     "send": "node scripts/send-emails.js"
