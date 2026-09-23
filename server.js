@@ -3,8 +3,10 @@
 const path = require('path');
 const express = require('express');
 const config = require('./lib/config');
-const { pool, query, init } = require('./lib/db');
+const { pool, query, init, newToken } = require('./lib/db');
 const session = require('./lib/session');
+const { runImport } = require('./lib/importer');
+const { sendEmails } = require('./lib/mailer');
 
 const app = express();
 if (config.trustProxy) app.set('trust proxy', 1);
@@ -198,6 +200,78 @@ app.post('/api/attendees/:id/undo', session.requireStaff, async (req, res) => {
   } catch (err) {
     console.error('undo error:', err.message);
     res.status(500).json({ ok: false });
+  }
+});
+
+// Add a single attendee by hand (assigns a token, like the importer does).
+app.post('/api/attendees', session.requireStaff, async (req, res) => {
+  const name = String((req.body && req.body.name) || '').trim();
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  if (!name) return res.status(400).json({ error: 'Name is required.' });
+  try {
+    const { rows } = await query(
+      `INSERT INTO attendees (name, email, extra, token) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [name, email || null, '{}', newToken()]
+    );
+    res.json({ ok: true, id: rows[0].id });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'An attendee with that email already exists.' });
+    }
+    console.error('add error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete an attendee (and their scan logs).
+app.delete('/api/attendees/:id', session.requireStaff, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'bad id' });
+  try {
+    await query('DELETE FROM scans WHERE attendee_id = $1', [id]);
+    const info = await query('DELETE FROM attendees WHERE id = $1', [id]);
+    res.json({ ok: info.rowCount === 1 });
+  } catch (err) {
+    console.error('delete error:', err.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// Upload an .xlsx from the admin page and import it (assigns tokens, upserts).
+// The file is sent as the raw request body; parsed in memory (no disk write).
+const XLSX_TYPES = [
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/octet-stream',
+];
+app.post(
+  '/api/import',
+  session.requireStaff,
+  express.raw({ type: XLSX_TYPES, limit: '15mb' }),
+  async (req, res) => {
+    if (!req.body || !req.body.length) {
+      return res.status(400).json({ error: 'No file received. Upload an .xlsx file.' });
+    }
+    try {
+      const result = await runImport({ buffer: req.body });
+      res.json(result);
+    } catch (err) {
+      console.error('import error:', err.message);
+      res.status(400).json({ error: err.message });
+    }
+  }
+);
+
+// Email attendees their QR from the admin page. Body: { resend, dryRun }.
+app.post('/api/send', session.requireStaff, async (req, res) => {
+  const resend = !!(req.body && req.body.resend);
+  const dryRun = !!(req.body && req.body.dryRun);
+  try {
+    const result = await sendEmails({ resend, dryRun });
+    res.json(result);
+  } catch (err) {
+    console.error('send error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

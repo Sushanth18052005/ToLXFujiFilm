@@ -18,6 +18,34 @@
   </div>
 
   <div class="wrap" style="max-width:720px">
+    <div class="card" style="margin:16px 0;padding:16px;text-align:left">
+      <strong>Manage attendees</strong>
+      <div class="muted" style="font-size:13px;margin:4px 0 12px">
+        Upload the registration spreadsheet, then email everyone their QR code.
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+        <input type="file" id="file" accept=".xlsx,.xls" style="flex:1;min-width:180px">
+        <button id="importBtn" onclick="doImport()">Import spreadsheet</button>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <button class="ghost" id="dryBtn" onclick="doSend(true)">Preview (dry run)</button>
+        <button id="sendBtn" onclick="doSend(false)">Send QR emails</button>
+        <label class="muted" style="font-size:13px;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="resend"> resend to everyone
+        </label>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid rgba(128,128,128,.25)">
+        <input id="newName" placeholder="Name" style="flex:1;min-width:120px">
+        <input id="newEmail" placeholder="Email (optional)" style="flex:1;min-width:120px">
+        <button class="ghost" id="addBtn" onclick="addAttendee()">Add attendee</button>
+      </div>
+
+      <pre id="log" class="muted" style="display:none;white-space:pre-wrap;font-size:12px;margin:12px 0 0;max-height:200px;overflow:auto"></pre>
+    </div>
+
     <input id="q" placeholder="Search by name or email…" style="width:100%;margin:8px 0 16px">
     <div id="list"></div>
   </div>
@@ -26,10 +54,110 @@
     const statsEl = document.getElementById('stats');
     const listEl = document.getElementById('list');
     const qEl = document.getElementById('q');
+    const logEl = document.getElementById('log');
+    const fileEl = document.getElementById('file');
 
     function esc(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
         ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+
+    function log(msg) {
+      logEl.style.display = 'block';
+      logEl.textContent = msg;
+    }
+
+    function setBusy(busy) {
+      document.getElementById('importBtn').disabled = busy;
+      document.getElementById('sendBtn').disabled = busy;
+      document.getElementById('dryBtn').disabled = busy;
+      document.getElementById('addBtn').disabled = busy;
+    }
+
+    async function addAttendee() {
+      const name = document.getElementById('newName').value.trim();
+      const email = document.getElementById('newEmail').value.trim();
+      if (!name) return alert('Enter a name.');
+      setBusy(true);
+      try {
+        const r = await fetch('/api/attendees', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email }),
+        });
+        if (r.status === 401) return location.href = '/login';
+        const d = await r.json();
+        if (!r.ok) { log('Add failed: ' + (d.error || r.status)); return; }
+        log('Added ' + name + (email ? ' <' + email + '>' : '') + '.');
+        document.getElementById('newName').value = '';
+        document.getElementById('newEmail').value = '';
+        loadStats(); loadList();
+      } catch (e) {
+        log('Add error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function delAttendee(id, name) {
+      if (!confirm('Delete ' + name + '? This removes them and their scan history.')) return;
+      const r = await fetch('/api/attendees/' + id, { method: 'DELETE' });
+      if (r.status === 401) return location.href = '/login';
+      loadStats(); loadList();
+    }
+
+    async function doImport() {
+      const f = fileEl.files[0];
+      if (!f) return alert('Choose an .xlsx file first.');
+      setBusy(true);
+      log('Importing ' + f.name + '…');
+      try {
+        const r = await fetch('/api/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+          body: f,
+        });
+        if (r.status === 401) return location.href = '/login';
+        const d = await r.json();
+        if (!r.ok) { log('Import failed: ' + (d.error || r.status)); return; }
+        log(`Import complete. Created ${d.created}, updated ${d.updated}, skipped ${d.skipped}. Total in DB: ${d.total}.`
+          + (d.emailColDetected ? '' : '\nNote: no email column detected — those rows can’t be emailed.'));
+        loadStats(); loadList();
+      } catch (e) {
+        log('Import error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function doSend(dryRun) {
+      const resend = document.getElementById('resend').checked;
+      if (!dryRun && !confirm(resend ? 'Email EVERYONE their QR (including people already emailed)?' : 'Email QR codes to everyone not yet emailed?')) return;
+      setBusy(true);
+      log(dryRun ? 'Checking who would be emailed…' : 'Sending emails… this can take a while for large lists.');
+      try {
+        const r = await fetch('/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resend, dryRun }),
+        });
+        if (r.status === 401) return location.href = '/login';
+        const d = await r.json();
+        if (!r.ok) { log('Send failed: ' + (d.error || r.status)); return; }
+        if (d.dryRun) {
+          const lines = (d.recipients || []).map(x => '  ' + x.name + ' <' + (x.email || '') + '>');
+          log(`[dry run] ${d.total} recipient(s) would be emailed:\n` + lines.join('\n'));
+        } else {
+          let msg = `Done. Sent ${d.sent}, failed ${d.failed}.`;
+          if (d.errors && d.errors.length) msg += '\n' + d.errors.map(e => '  FAILED ' + e.email + ': ' + e.error).join('\n');
+          log(msg);
+        }
+        loadStats();
+      } catch (e) {
+        log('Send error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
     }
 
     async function loadStats() {
@@ -52,6 +180,7 @@
           <div>
             <span class="badge ${a.status}">${a.status}</span>
             ${a.status === 'entered' ? `<button class="ghost" style="padding:6px 10px;font-size:12px;margin-left:8px" onclick="undo(${a.id})">Undo</button>` : ''}
+            <button class="ghost" style="padding:6px 10px;font-size:12px;margin-left:8px" onclick="delAttendee(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Delete</button>
           </div>
         </div>`).join('') || '<p class="muted">No matches.</p>';
     }
