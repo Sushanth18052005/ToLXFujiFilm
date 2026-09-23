@@ -14,3 +14,8 @@ data/seed.b64.txt
 qrcodes/
 *.log
 .DS_Store
+
+# local scratch / tooling
+_brochure/
+_up.xlsx
+.claude/

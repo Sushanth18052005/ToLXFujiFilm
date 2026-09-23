@@ -8,17 +8,21 @@
 </head>
 <body>
   <div class="topbar">
-    <strong>Dashboard</strong>
+    <div class="brand">Traces of Lenses <span class="x">×</span> Fujifilm <span class="kmit">KMIT</span></div>
     <span class="stats" id="stats">—</span>
-    <span><a href="/scan">Scanner</a> ·
+    <span class="right"><a href="/scan">Scanner</a>
       <form method="post" action="/logout" style="display:inline">
-        <button class="ghost" style="padding:6px 10px;font-size:13px">Logout</button>
+        <button class="ghost" style="padding:8px 12px;font-size:12px">Logout</button>
       </form>
     </span>
   </div>
 
   <div class="wrap" style="max-width:720px">
-    <div class="card" style="margin:16px 0;padding:16px;text-align:left">
+    <div style="margin:2px 0 18px">
+      <span class="eyebrow">Attendee Dashboard</span>
+      <hr class="accent-bar">
+    </div>
+    <div class="card" style="margin:0 0 16px;text-align:left">
       <strong>Manage attendees</strong>
       <div class="muted" style="font-size:13px;margin:4px 0 12px">
         Upload the registration spreadsheet, then email everyone their QR code.

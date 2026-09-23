@@ -71,19 +71,28 @@ function esc(s) {
 function loginPage(next, error) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Staff login — ${esc(config.eventName)}</title>
+<title>Staff Access — ${esc(config.eventName)}</title>
 <link rel="stylesheet" href="/styles.css"></head>
 <body class="center">
-  <form class="card" method="post" action="/login">
-    <h1>${esc(config.eventName)}</h1>
-    <p class="muted">Staff entry scanner</p>
-    ${error ? `<p class="error">${esc(error)}</p>` : ''}
-    <input type="hidden" name="next" value="${esc(next || '/scan')}">
-    <label>Staff password
-      <input type="password" name="password" autocomplete="current-password" required autofocus>
-    </label>
-    <button type="submit">Unlock scanner</button>
-  </form>
+  <div class="login">
+    <div class="login__media">
+      <img src="/img/hero.jpg" alt="Traces of Lenses × Fujifilm">
+      <div class="cap">See • Frame • Create</div>
+    </div>
+    <form class="login__form" method="post" action="/login">
+      <div class="brand">Traces of Lenses <span class="x">×</span> Fujifilm <span class="kmit">KMIT</span></div>
+      <span class="eyebrow">Staff Access</span>
+      <h1>Entry<br>Scanner</h1>
+      <p class="tagline">A New Way To See</p>
+      <hr class="rule">
+      ${error ? `<p class="error">${esc(error)}</p>` : ''}
+      <input type="hidden" name="next" value="${esc(next || '/scan')}">
+      <label>Staff password
+        <input type="password" name="password" autocomplete="current-password" required autofocus>
+      </label>
+      <button type="submit">Unlock Scanner</button>
+    </form>
+  </div>
 </body></html>`;
 }
 

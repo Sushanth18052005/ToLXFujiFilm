@@ -9,23 +9,27 @@
 </head>
 <body>
   <div class="topbar">
-    <strong>ToLXFujiFilm</strong>
+    <div class="brand">Traces of Lenses <span class="x">×</span> Fujifilm <span class="kmit">KMIT</span></div>
     <span class="stats" id="stats">—</span>
-    <span><a href="/admin">Dashboard</a> ·
+    <span class="right"><a href="/admin">Dashboard</a>
       <form method="post" action="/logout" style="display:inline">
-        <button class="ghost" style="padding:6px 10px;font-size:13px">Logout</button>
+        <button class="ghost" style="padding:8px 12px;font-size:12px">Logout</button>
       </form>
     </span>
   </div>
 
   <div class="wrap">
+    <div style="margin:2px 0 18px">
+      <span class="eyebrow">Entry Scanner</span>
+      <hr class="accent-bar">
+    </div>
     <div id="reader"></div>
     <div id="result" class="result" role="status" aria-live="assertive">
       <h2 id="result-title"></h2>
       <div class="name" id="result-name"></div>
       <div class="detail" id="result-detail"></div>
     </div>
-    <p class="muted" id="hint" style="margin-top:14px">
+    <p class="muted" id="hint" style="margin-top:16px;letter-spacing:.02em">
       Point the camera at an attendee's QR code. Each code checks a person in once.
     </p>
   </div>
