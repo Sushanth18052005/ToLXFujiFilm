@@ -8,7 +8,7 @@
 const fs = require('fs');
 const ExcelJS = require('exceljs');
 const config = require('../lib/config');
-const { db, newToken } = require('../lib/db');
+const { pool, query, ensureSchema, newToken } = require('../lib/db');
 
 const file = process.argv[2] || config.registrationsFile;
 
@@ -25,22 +25,14 @@ function findColumn(headers, patterns) {
   return null;
 }
 
-const findByEmail = db.prepare(`SELECT id FROM attendees WHERE email = ?`);
-const updateByEmail = db.prepare(`UPDATE attendees SET name = @name, extra = @extra WHERE id = @id`);
-const findByName = db.prepare(
-  `SELECT id FROM attendees WHERE (email IS NULL OR email = '') AND lower(name) = lower(?)`
-);
-const insertRow = db.prepare(
-  `INSERT INTO attendees (name, email, extra, token) VALUES (@name, @email, @extra, @token)`
-);
-const updateNoEmail = db.prepare(`UPDATE attendees SET name = @name, extra = @extra WHERE id = @id`);
-
 async function main() {
   if (!fs.existsSync(file)) {
     console.error(`Registration file not found: ${file}`);
     console.error('Put your spreadsheet there or pass a path: npm run import -- ./data/regs.xlsx');
     process.exit(1);
   }
+
+  await ensureSchema();
 
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(file);
@@ -61,7 +53,10 @@ async function main() {
   let updated = 0;
   let skipped = 0;
 
-  const run = db.transaction(() => {
+  // One transaction on a dedicated connection so a mid-import failure rolls back.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
       const name = norm(row.getCell(nameCol).text || row.getCell(nameCol).value);
@@ -81,35 +76,54 @@ async function main() {
       const extraJson = JSON.stringify(extra);
 
       if (email) {
-        const existing = findByEmail.get(email);
-        if (existing) {
-          updateByEmail.run({ name, extra: extraJson, id: existing.id });
+        const existing = await client.query(`SELECT id FROM attendees WHERE email = $1`, [email]);
+        if (existing.rows[0]) {
+          await client.query(`UPDATE attendees SET name = $1, extra = $2 WHERE id = $3`,
+            [name, extraJson, existing.rows[0].id]);
           updated++;
         } else {
-          insertRow.run({ name, email, extra: extraJson, token: newToken() });
+          await client.query(
+            `INSERT INTO attendees (name, email, extra, token) VALUES ($1, $2, $3, $4)`,
+            [name, email, extraJson, newToken()]
+          );
           created++;
         }
       } else {
-        const existing = findByName.get(name);
-        if (existing) {
-          updateNoEmail.run({ name, extra: extraJson, id: existing.id });
+        const existing = await client.query(
+          `SELECT id FROM attendees WHERE (email IS NULL OR email = '') AND lower(name) = lower($1)`,
+          [name]
+        );
+        if (existing.rows[0]) {
+          await client.query(`UPDATE attendees SET name = $1, extra = $2 WHERE id = $3`,
+            [name, extraJson, existing.rows[0].id]);
           updated++;
         } else {
-          insertRow.run({ name, email: null, extra: extraJson, token: newToken() });
+          await client.query(
+            `INSERT INTO attendees (name, email, extra, token) VALUES ($1, $2, $3, $4)`,
+            [name, null, extraJson, newToken()]
+          );
           created++;
         }
       }
     }
-  });
-  run();
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
-  const total = db.prepare('SELECT COUNT(*) c FROM attendees').get().c;
+  const { rows } = await query('SELECT COUNT(*)::int AS c FROM attendees');
   console.log(`Import complete. Created ${created}, updated ${updated}, skipped ${skipped}.`);
-  console.log(`Total attendees in DB: ${total}.`);
+  console.log(`Total attendees in DB: ${rows[0].c}.`);
   if (!emailCol) console.log('Note: no email column detected — emails cannot be sent for these rows.');
 }
 
-main().catch((err) => {
-  console.error(err.message);
-  process.exit(1);
-});
+main()
+  .then(() => pool.end())
+  .catch(async (err) => {
+    console.error(err.message);
+    await pool.end().catch(() => {});
+    process.exit(1);
+  });

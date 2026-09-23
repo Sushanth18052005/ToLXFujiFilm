@@ -9,7 +9,7 @@
 const QRCode = require('qrcode');
 const nodemailer = require('nodemailer');
 const config = require('../lib/config');
-const { db } = require('../lib/db');
+const { pool, query } = require('../lib/db');
 const { scanUrl } = require('./generate-qrs');
 
 const RESEND = process.argv.includes('--resend');
@@ -42,7 +42,7 @@ async function main() {
   const where = RESEND
     ? `email IS NOT NULL AND email <> ''`
     : `email IS NOT NULL AND email <> '' AND email_sent_at IS NULL`;
-  const rows = db.prepare(`SELECT id, name, email, token FROM attendees WHERE ${where} ORDER BY id`).all();
+  const { rows } = await query(`SELECT id, name, email, token FROM attendees WHERE ${where} ORDER BY id`);
 
   if (rows.length === 0) {
     console.log('Nobody to email. (Use --resend to email everyone again.)');
@@ -62,7 +62,6 @@ async function main() {
     await transporter.verify();
   }
 
-  const markSent = db.prepare(`UPDATE attendees SET email_sent_at = datetime('now') WHERE id = ?`);
   let sent = 0;
   let failed = 0;
 
@@ -82,7 +81,7 @@ async function main() {
           { filename: 'entry-qr.png', content: png, cid: 'qr@entry' },
         ],
       });
-      markSent.run(a.id);
+      await query(`UPDATE attendees SET email_sent_at = now() WHERE id = $1`, [a.id]);
       sent++;
       process.stdout.write(`\r  sent ${sent}/${rows.length}`);
       await sleep(250); // be gentle with the SMTP server
@@ -94,7 +93,10 @@ async function main() {
   console.log(`\nDone. Sent ${sent}, failed ${failed}.`);
 }
 
-main().catch((err) => {
-  console.error(err.message);
-  process.exit(1);
-});
+main()
+  .then(() => pool.end())
+  .catch(async (err) => {
+    console.error(err.message);
+    await pool.end().catch(() => {});
+    process.exit(1);
+  });

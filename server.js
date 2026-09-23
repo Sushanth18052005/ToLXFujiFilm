@@ -3,7 +3,7 @@
 const path = require('path');
 const express = require('express');
 const config = require('./lib/config');
-const { db } = require('./lib/db');
+const { pool, query, init } = require('./lib/db');
 const session = require('./lib/session');
 
 const app = express();
@@ -22,13 +22,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- prepared statements ----------
-const claimEntry = db.prepare(
-  `UPDATE attendees SET status='entered', entered_at=datetime('now') WHERE token=? AND status='registered'`
-);
-const getByToken = db.prepare(`SELECT * FROM attendees WHERE token=?`);
-const logScan = db.prepare(`INSERT INTO scans (attendee_id, token, result, ip) VALUES (?,?,?,?)`);
-const undoEntry = db.prepare(`UPDATE attendees SET status='registered', entered_at=NULL WHERE id=?`);
+// ---------- SQL ----------
+const SQL_CLAIM = `UPDATE attendees SET status='entered', entered_at=now() WHERE token=$1 AND status='registered'`;
+const SQL_GET = `SELECT id, name, email, status,
+    to_char(entered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS entered_at, extra
+  FROM attendees WHERE token=$1`;
+const SQL_LOG = `INSERT INTO scans (attendee_id, token, result, ip) VALUES ($1,$2,$3,$4)`;
+const SQL_UNDO = `UPDATE attendees SET status='registered', entered_at=NULL WHERE id=$1`;
 
 function publicView(a) {
   let extra = {};
@@ -37,23 +37,25 @@ function publicView(a) {
 }
 
 // Atomically claim entry for a token. Safe against double-scans / races because
-// the UPDATE only succeeds when status is still 'registered'.
-function verifyToken(token, ip) {
+// the UPDATE only succeeds when status is still 'registered' — Postgres locks
+// the row, so exactly one concurrent scan gets rowCount === 1.
+async function verifyToken(token, ip) {
   if (!token || typeof token !== 'string') {
-    logScan.run(null, String(token || ''), 'invalid', ip);
+    await query(SQL_LOG, [null, String(token || ''), 'invalid', ip]);
     return { result: 'invalid' };
   }
-  const info = claimEntry.run(token);
-  const a = getByToken.get(token);
+  const claim = await query(SQL_CLAIM, [token]);
+  const { rows } = await query(SQL_GET, [token]);
+  const a = rows[0];
   if (!a) {
-    logScan.run(null, token, 'invalid', ip);
+    await query(SQL_LOG, [null, token, 'invalid', ip]);
     return { result: 'invalid' };
   }
-  if (info.changes === 1) {
-    logScan.run(a.id, token, 'entered', ip);
+  if (claim.rowCount === 1) {
+    await query(SQL_LOG, [a.id, token, 'entered', ip]);
     return { result: 'entered', attendee: publicView(a) };
   }
-  logScan.run(a.id, token, 'already', ip);
+  await query(SQL_LOG, [a.id, token, 'already', ip]);
   return { result: 'already', attendee: publicView(a) };
 }
 
@@ -144,33 +146,59 @@ app.get('/admin', session.requireStaff, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-app.post('/api/verify', session.requireStaff, (req, res) => {
+app.post('/api/verify', session.requireStaff, async (req, res) => {
   const token = req.body && req.body.token;
-  res.json(verifyToken(token, req.ip));
+  try {
+    res.json(await verifyToken(token, req.ip));
+  } catch (err) {
+    console.error('verify error:', err.message);
+    res.status(500).json({ result: 'error' });
+  }
 });
 
-app.get('/api/stats', session.requireStaff, (req, res) => {
-  const total = db.prepare('SELECT COUNT(*) c FROM attendees').get().c;
-  const entered = db.prepare(`SELECT COUNT(*) c FROM attendees WHERE status='entered'`).get().c;
-  res.json({ total, entered, remaining: total - entered });
+app.get('/api/stats', session.requireStaff, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE status='entered')::int AS entered
+       FROM attendees`
+    );
+    const { total, entered } = rows[0];
+    res.json({ total, entered, remaining: total - entered });
+  } catch (err) {
+    console.error('stats error:', err.message);
+    res.status(500).json({ error: 'stats_failed' });
+  }
 });
 
-app.get('/api/attendees', session.requireStaff, (req, res) => {
+app.get('/api/attendees', session.requireStaff, async (req, res) => {
   const q = `%${String(req.query.q || '').toLowerCase()}%`;
-  const rows = db
-    .prepare(
-      `SELECT id, name, email, status, entered_at FROM attendees
-       WHERE lower(name) LIKE ? OR lower(COALESCE(email,'')) LIKE ?
-       ORDER BY entered_at DESC NULLS LAST, name LIMIT 200`
-    )
-    .all(q, q);
-  res.json(rows);
+  try {
+    const { rows } = await query(
+      `SELECT id, name, email, status,
+         to_char(entered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS entered_at
+       FROM attendees
+       WHERE lower(name) LIKE $1 OR lower(COALESCE(email,'')) LIKE $2
+       ORDER BY entered_at DESC NULLS LAST, name LIMIT 200`,
+      [q, q]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('attendees error:', err.message);
+    res.status(500).json({ error: 'query_failed' });
+  }
 });
 
 // Staff correction: undo an accidental entry so the person can re-enter.
-app.post('/api/attendees/:id/undo', session.requireStaff, (req, res) => {
-  const info = undoEntry.run(parseInt(req.params.id, 10));
-  res.json({ ok: info.changes === 1 });
+app.post('/api/attendees/:id/undo', session.requireStaff, async (req, res) => {
+  try {
+    const info = await query(SQL_UNDO, [parseInt(req.params.id, 10)]);
+    res.json({ ok: info.rowCount === 1 });
+  } catch (err) {
+    console.error('undo error:', err.message);
+    res.status(500).json({ ok: false });
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -184,9 +212,19 @@ if (!config.staffPassword) {
   console.warn('WARNING: STAFF_PASSWORD is empty — staff will not be able to log in.');
 }
 
-app.listen(config.port, () => {
-  console.log(`Entry system running on ${config.baseUrl} (port ${config.port})`);
-  console.log(`Scanner:  ${config.baseUrl}/scan`);
-  console.log(`Dashboard: ${config.baseUrl}/admin`);
-});
+// ---------- startup ----------
+(async () => {
+  try {
+    await init(); // create schema (idempotent) and seed if empty
+  } catch (err) {
+    console.error('FATAL: could not initialize the database:', err.message);
+    process.exit(1);
+  }
+
+  app.listen(config.port, () => {
+    console.log(`Entry system running on ${config.baseUrl} (port ${config.port})`);
+    console.log(`Scanner:  ${config.baseUrl}/scan`);
+    console.log(`Dashboard: ${config.baseUrl}/admin`);
+  });
+})();
 

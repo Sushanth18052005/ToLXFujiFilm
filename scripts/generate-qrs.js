@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const QRCode = require('qrcode');
 const config = require('../lib/config');
-const { db } = require('../lib/db');
+const { pool, query } = require('../lib/db');
 
 function safeName(s) {
   return String(s).replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'attendee';
@@ -20,7 +20,7 @@ function scanUrl(token) {
 
 async function main() {
   fs.mkdirSync(config.qrDir, { recursive: true });
-  const rows = db.prepare('SELECT id, name, token FROM attendees ORDER BY id').all();
+  const { rows } = await query('SELECT id, name, token FROM attendees ORDER BY id');
   if (rows.length === 0) {
     console.log('No attendees found. Run "npm run import" first.');
     return;
@@ -42,9 +42,15 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run when invoked directly (not when required by send-emails.js for scanUrl).
+if (require.main === module) {
+  main()
+    .then(() => pool.end())
+    .catch(async (err) => {
+      console.error(err);
+      await pool.end().catch(() => {});
+      process.exit(1);
+    });
+}
 
 module.exports = { scanUrl, safeName };

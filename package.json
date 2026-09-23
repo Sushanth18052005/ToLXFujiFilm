@@ -14,11 +14,11 @@
     "send": "node scripts/send-emails.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "nodemailer": "^10.0.10",
+    "pg": "^8.23.0",
     "qrcode": "^1.5.4"
   },
   "engines": {
