@@ -47,6 +47,11 @@
         <button class="ghost" id="addBtn" onclick="addAttendee()">Add attendee</button>
       </div>
 
+      <div class="controls" style="margin-top:10px">
+        <button class="ghost" id="exportBtn" onclick="doExport()">Export to Excel</button>
+        <span class="muted" style="align-self:center;font-size:12px;letter-spacing:.03em">Downloads all attendees; dashboard-added people are flagged “Added Manually”.</span>
+      </div>
+
       <pre id="log" class="muted" style="display:none;white-space:pre-wrap;font-size:12px;margin:12px 0 0;max-height:200px;overflow:auto"></pre>
     </div>
 
@@ -76,6 +81,7 @@
       document.getElementById('sendBtn').disabled = busy;
       document.getElementById('dryBtn').disabled = busy;
       document.getElementById('addBtn').disabled = busy;
+      document.getElementById('exportBtn').disabled = busy;
     }
 
     // Read a response as JSON, but fail with a clear message if the body is an
@@ -141,6 +147,33 @@
         loadStats(); loadList();
       } catch (e) {
         log('Import error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function doExport() {
+      setBusy(true);
+      log('Preparing export…');
+      try {
+        const r = await fetch('/api/export');
+        if (r.status === 401) return location.href = '/login';
+        if (!r.ok) {
+          let msg = r.status;
+          try { msg = (await parseJson(r)).error || msg; } catch (e) { msg = e.message; }
+          log('Export failed: ' + msg);
+          return;
+        }
+        const blob = await r.blob();
+        const name = 'attendees-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        log('Exported ' + name + '.');
+      } catch (e) {
+        log('Export error: ' + e.message);
       } finally {
         setBusy(false);
       }

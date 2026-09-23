@@ -7,6 +7,7 @@ const config = require('./lib/config');
 const { pool, query, init, newToken } = require('./lib/db');
 const session = require('./lib/session');
 const { runImport } = require('./lib/importer');
+const { buildAttendeesWorkbook } = require('./lib/exporter');
 const { sendEmails } = require('./lib/mailer');
 
 const app = express();
@@ -191,11 +192,12 @@ app.get('/api/stats', session.requireStaff, async (req, res) => {
     const { rows } = await query(
       `SELECT
          COUNT(*)::int AS total,
-         COUNT(*) FILTER (WHERE status='entered')::int AS entered
+         COUNT(*) FILTER (WHERE status='entered')::int AS entered,
+         COUNT(*) FILTER (WHERE email_sent_at IS NOT NULL)::int AS emailed
        FROM attendees`
     );
-    const { total, entered } = rows[0];
-    res.json({ total, entered, remaining: total - entered });
+    const { total, entered, emailed } = rows[0];
+    res.json({ total, entered, emailed, remaining: total - entered });
   } catch (err) {
     console.error('stats error:', err.message);
     res.status(500).json({ error: 'stats_failed' });
@@ -238,7 +240,7 @@ app.post('/api/attendees', session.requireStaff, async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Name is required.' });
   try {
     const { rows } = await query(
-      `INSERT INTO attendees (name, email, extra, token) VALUES ($1, $2, $3, $4) RETURNING id`,
+      `INSERT INTO attendees (name, email, extra, token, source) VALUES ($1, $2, $3, $4, 'manual') RETURNING id`,
       [name, email || null, '{}', newToken()]
     );
     res.json({ ok: true, id: rows[0].id });
@@ -289,6 +291,22 @@ app.post(
     }
   }
 );
+
+// Export every attendee as a downloadable .xlsx from the admin page. Mirrors the
+// import columns and adds an "Added Manually" flag for people created in the
+// dashboard rather than imported from a spreadsheet. Never includes the token.
+app.get('/api/export', session.requireStaff, async (req, res) => {
+  try {
+    const buf = await buildAttendeesWorkbook();
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.set('Content-Disposition', `attachment; filename="attendees-${stamp}.xlsx"`);
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(Buffer.from(buf));
+  } catch (err) {
+    console.error('export error:', err.message);
+    res.status(500).json({ error: 'export_failed' });
+  }
+});
 
 // Background email send job. Sending is a serial loop (one Brevo API call per
 // attendee) that can take minutes for a big list; awaiting it inside the request
