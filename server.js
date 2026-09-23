@@ -2,6 +2,7 @@
 
 const path = require('path');
 const express = require('express');
+const QRCode = require('qrcode');
 const config = require('./lib/config');
 const { pool, query, init, newToken } = require('./lib/db');
 const session = require('./lib/session');
@@ -119,6 +120,24 @@ function noteFail(ip) {
 
 // ---------- routes ----------
 app.get('/healthz', (req, res) => res.type('text').send('ok'));
+
+// Public: an attendee's QR as a PNG, for the hosted <img> in their email (Brevo
+// can't embed inline CID images). Only serves QRs for tokens that exist. The
+// token is the entry credential the email already contains, so this exposes
+// nothing new; the ?t= link inside still requires a staff login to check anyone in.
+app.get('/qr/:token', async (req, res) => {
+  const token = String(req.params.token || '').replace(/\.png$/i, '');
+  try {
+    const { rows } = await query('SELECT 1 FROM attendees WHERE token = $1', [token]);
+    if (!rows.length) return res.status(404).type('text').send('not found');
+    const png = await QRCode.toBuffer(`${config.baseUrl}/scan?t=${encodeURIComponent(token)}`,
+      { errorCorrectionLevel: 'M', margin: 2, width: 512 });
+    res.type('png').set('Cache-Control', 'public, max-age=86400').send(png);
+  } catch (err) {
+    console.error('qr error:', err.message);
+    res.status(500).type('text').send('error');
+  }
+});
 
 app.get('/', (req, res) => res.redirect('/scan'));
 
@@ -271,17 +290,69 @@ app.post(
   }
 );
 
+// Background email send job. Sending is a serial SMTP loop that can take minutes
+// for a big list; awaiting it inside the request makes Render's proxy time out and
+// return an HTML error page (the admin page then chokes on "Unexpected token '<'").
+// So we kick the send off in the background and let the admin page poll
+// /api/send/status. Single shared staff role + single instance ⇒ one job at a time.
+let sendJob = {
+  running: false, done: false, startedAt: null, finishedAt: null,
+  total: 0, sent: 0, failed: 0, errors: [], last: null, error: null, resend: false,
+};
+
+function runSendJob({ resend }) {
+  sendJob = {
+    running: true, done: false, startedAt: Date.now(), finishedAt: null,
+    total: 0, sent: 0, failed: 0, errors: [], last: null, error: null, resend,
+  };
+  sendEmails({
+    resend,
+    onProgress: ({ sent, total, name }) => {
+      sendJob.sent = sent;
+      sendJob.total = total;
+      sendJob.last = name;
+    },
+  }).then((result) => {
+    sendJob.total = result.total;
+    sendJob.sent = result.sent;
+    sendJob.failed = result.failed;
+    sendJob.errors = result.errors || [];
+  }).catch((err) => {
+    console.error('send job error:', err.message);
+    sendJob.error = err.message;
+  }).finally(() => {
+    sendJob.running = false;
+    sendJob.done = true;
+    sendJob.finishedAt = Date.now();
+  });
+}
+
 // Email attendees their QR from the admin page. Body: { resend, dryRun }.
+// dryRun answers synchronously (a DB query only, no SMTP); a real send starts a
+// background job and returns 202 — progress is read from /api/send/status.
 app.post('/api/send', session.requireStaff, async (req, res) => {
   const resend = !!(req.body && req.body.resend);
   const dryRun = !!(req.body && req.body.dryRun);
-  try {
-    const result = await sendEmails({ resend, dryRun });
-    res.json(result);
-  } catch (err) {
-    console.error('send error:', err.message);
-    res.status(500).json({ error: err.message });
+
+  if (dryRun) {
+    try {
+      res.json(await sendEmails({ resend, dryRun: true }));
+    } catch (err) {
+      console.error('send dry-run error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+    return;
   }
+
+  if (sendJob.running) {
+    return res.status(409).json({ error: 'A send is already in progress.', status: sendJob });
+  }
+  runSendJob({ resend });
+  res.status(202).json({ started: true });
+});
+
+app.get('/api/send/status', session.requireStaff, (req, res) => {
+  res.json(sendJob);
 });
 
 app.use(express.static(path.join(__dirname, 'public')));

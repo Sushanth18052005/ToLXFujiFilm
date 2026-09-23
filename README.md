@@ -32,7 +32,10 @@ Edit `.env`:
   phone cameras will refuse to open the scan link and refuse camera access.
 - `STAFF_PASSWORD` — what staff type to unlock the scanner.
 - `SESSION_SECRET` — a long random string (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).
-- `SMTP_*` / `MAIL_FROM` — your mail server (Gmail: use an App Password).
+- `BREVO_API_KEY` / `MAIL_FROM` — email is sent via Brevo's transactional HTTP API
+  (Render's free tier blocks outbound SMTP, so Gmail/SMTP won't work when hosted).
+  Create a free Brevo account, verify a sender, generate an API key, and set
+  `MAIL_FROM` to that verified address. See `.env.example` for the steps.
 
 ## Usage
 

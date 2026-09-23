@@ -31,19 +31,13 @@ services:
         sync: false                    # set in the Render dashboard
       - key: EVENT_NAME
         sync: false
-      # SMTP — required to send QR emails from the /admin page (server-side).
-      - key: SMTP_HOST
-        sync: false                    # e.g. smtp.gmail.com
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_SECURE
-        value: "false"                 # true for port 465, false for 587 (STARTTLS)
-      - key: SMTP_USER
-        sync: false                    # your SMTP username / email
-      - key: SMTP_PASS
-        sync: false                    # Gmail: an App Password (keep secret)
+      # Email — QR passes are sent via Brevo's transactional HTTP API. Render's
+      # free tier blocks outbound SMTP (ports 25/465/587), so Gmail/SMTP can't
+      # send from here; Brevo's API is plain HTTPS on 443.
+      - key: BREVO_API_KEY
+        sync: false                    # Brevo dashboard → SMTP & API → API Keys (keep secret)
       - key: MAIL_FROM
-        sync: false                    # e.g. "Workshop Team <you@example.com>"
+        sync: false                    # a Brevo-verified sender, e.g. "Traces of Lenses × Fujifilm <you@gmail.com>"
       # SEED_DATA is optional and usually NOT needed with Neon: import directly into
       # the shared Neon DB from your machine and the server reads the same rows.
       # Only set it if you want the server to seed an empty DB on first boot.

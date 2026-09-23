@@ -12,7 +12,7 @@
     <span class="stats" id="stats">—</span>
     <span class="right"><a href="/scan">Scanner</a>
       <form method="post" action="/logout" style="display:inline">
-        <button class="ghost" style="padding:8px 12px;font-size:12px">Logout</button>
+        <button class="ghost btn-sm">Logout</button>
       </form>
     </span>
   </div>
@@ -28,20 +28,20 @@
         Upload the registration spreadsheet, then email everyone their QR code.
       </div>
 
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px">
+      <div class="controls" style="margin-bottom:10px">
         <input type="file" id="file" accept=".xlsx,.xls" style="flex:1;min-width:180px">
         <button id="importBtn" onclick="doImport()">Import spreadsheet</button>
       </div>
 
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <div class="controls">
         <button class="ghost" id="dryBtn" onclick="doSend(true)">Preview (dry run)</button>
         <button id="sendBtn" onclick="doSend(false)">Send QR emails</button>
-        <label class="muted" style="font-size:13px;display:flex;align-items:center;gap:6px">
+        <label class="muted" style="flex-direction:row;align-items:center;gap:8px;margin:0;font-size:13px;letter-spacing:.04em">
           <input type="checkbox" id="resend"> resend to everyone
         </label>
       </div>
 
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid rgba(128,128,128,.25)">
+      <div class="controls" style="margin-top:12px;padding-top:14px;border-top:1px solid var(--line)">
         <input id="newName" placeholder="Name" style="flex:1;min-width:120px">
         <input id="newEmail" placeholder="Email (optional)" style="flex:1;min-width:120px">
         <button class="ghost" id="addBtn" onclick="addAttendee()">Add attendee</button>
@@ -78,6 +78,18 @@
       document.getElementById('addBtn').disabled = busy;
     }
 
+    // Read a response as JSON, but fail with a clear message if the body is an
+    // HTML error page (e.g. a proxy timeout) instead of the cryptic
+    // "Unexpected token '<'" that a bare r.json() throws.
+    async function parseJson(r) {
+      const t = await r.text();
+      try {
+        return JSON.parse(t);
+      } catch {
+        throw new Error(`server returned a non-JSON response (HTTP ${r.status}). It may have timed out or restarted — try again.`);
+      }
+    }
+
     async function addAttendee() {
       const name = document.getElementById('newName').value.trim();
       const email = document.getElementById('newEmail').value.trim();
@@ -90,7 +102,7 @@
           body: JSON.stringify({ name, email }),
         });
         if (r.status === 401) return location.href = '/login';
-        const d = await r.json();
+        const d = await parseJson(r);
         if (!r.ok) { log('Add failed: ' + (d.error || r.status)); return; }
         log('Added ' + name + (email ? ' <' + email + '>' : '') + '.');
         document.getElementById('newName').value = '';
@@ -122,7 +134,7 @@
           body: f,
         });
         if (r.status === 401) return location.href = '/login';
-        const d = await r.json();
+        const d = await parseJson(r);
         if (!r.ok) { log('Import failed: ' + (d.error || r.status)); return; }
         log(`Import complete. Created ${d.created}, updated ${d.updated}, skipped ${d.skipped}. Total in DB: ${d.total}.`
           + (d.emailColDetected ? '' : '\nNote: no email column detected — those rows can’t be emailed.'));
@@ -138,7 +150,7 @@
       const resend = document.getElementById('resend').checked;
       if (!dryRun && !confirm(resend ? 'Email EVERYONE their QR (including people already emailed)?' : 'Email QR codes to everyone not yet emailed?')) return;
       setBusy(true);
-      log(dryRun ? 'Checking who would be emailed…' : 'Sending emails… this can take a while for large lists.');
+      log(dryRun ? 'Checking who would be emailed…' : 'Starting send…');
       try {
         const r = await fetch('/api/send', {
           method: 'POST',
@@ -146,21 +158,53 @@
           body: JSON.stringify({ resend, dryRun }),
         });
         if (r.status === 401) return location.href = '/login';
-        const d = await r.json();
-        if (!r.ok) { log('Send failed: ' + (d.error || r.status)); return; }
-        if (d.dryRun) {
+
+        if (dryRun) {
+          const d = await parseJson(r);
+          if (!r.ok) { log('Send failed: ' + (d.error || r.status)); return; }
           const lines = (d.recipients || []).map(x => '  ' + x.name + ' <' + (x.email || '') + '>');
           log(`[dry run] ${d.total} recipient(s) would be emailed:\n` + lines.join('\n'));
-        } else {
-          let msg = `Done. Sent ${d.sent}, failed ${d.failed}.`;
-          if (d.errors && d.errors.length) msg += '\n' + d.errors.map(e => '  FAILED ' + e.email + ': ' + e.error).join('\n');
-          log(msg);
+          return;
         }
-        loadStats();
+
+        // Real send runs in the background on the server (so a big list can't trip
+        // a proxy timeout). 202 = we started it; 409 = one was already running.
+        const d = await parseJson(r);
+        if (r.status === 409) log('A send is already in progress — tracking it…');
+        else if (!r.ok) { log('Send failed: ' + (d.error || r.status)); return; }
+        await pollSend();
       } catch (e) {
         log('Send error: ' + e.message);
       } finally {
         setBusy(false);
+      }
+    }
+
+    // Poll the background send job until it finishes, updating the log with progress.
+    async function pollSend() {
+      while (true) {
+        await new Promise(res => setTimeout(res, 1500));
+        let s;
+        try {
+          const r = await fetch('/api/send/status');
+          if (r.status === 401) return location.href = '/login';
+          s = await parseJson(r);
+        } catch (e) {
+          log('Lost contact while sending: ' + e.message
+            + '\nThe send may still be running on the server — click “Send QR emails” again to re-check.');
+          return;
+        }
+        if (s.error) { log('Send failed: ' + s.error); loadStats(); return; }
+        if (!s.done) {
+          log(`Sending… ${s.sent}/${s.total || '?'}` + (s.last ? '  (last: ' + s.last + ')' : ''));
+          loadStats();
+          continue;
+        }
+        let msg = `Done. Sent ${s.sent}, failed ${s.failed}.`;
+        if (s.errors && s.errors.length) msg += '\n' + s.errors.map(e => '  FAILED ' + e.email + ': ' + e.error).join('\n');
+        log(msg);
+        loadStats(); loadList();
+        return;
       }
     }
 
@@ -181,10 +225,10 @@
             <div>${esc(a.name)}</div>
             <div class="muted" style="font-size:12px">${esc(a.email || '')}${a.entered_at ? ' · ' + esc(a.entered_at) + ' UTC' : ''}</div>
           </div>
-          <div>
+          <div style="display:flex;align-items:center;gap:8px">
             <span class="badge ${a.status}">${a.status}</span>
-            ${a.status === 'entered' ? `<button class="ghost" style="padding:6px 10px;font-size:12px;margin-left:8px" onclick="undo(${a.id})">Undo</button>` : ''}
-            <button class="ghost" style="padding:6px 10px;font-size:12px;margin-left:8px" onclick="delAttendee(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Delete</button>
+            ${a.status === 'entered' ? `<button class="ghost btn-sm" onclick="undo(${a.id})">Undo</button>` : ''}
+            <button class="ghost btn-sm" onclick="delAttendee(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Delete</button>
           </div>
         </div>`).join('') || '<p class="muted">No matches.</p>';
     }
