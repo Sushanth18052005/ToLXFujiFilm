@@ -1,0 +1,26 @@
+{
+  "name": "workshop-qr-entry",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QR-based workshop entry system: import registrations, email unique QR codes, and verify entry at the door.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "init-db": "node scripts/init-db.js",
+    "template": "node scripts/make-template.js",
+    "import": "node scripts/import.js",
+    "qrs": "node scripts/generate-qrs.js",
+    "send": "node scripts/send-emails.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "nodemailer": "^10.0.10",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

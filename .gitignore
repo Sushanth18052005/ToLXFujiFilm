@@ -1,0 +1,12 @@
+node_modules/
+.env
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/*.xlsx
+data/*.xls
+data/*.csv
+qrcodes/
+*.log
+.DS_Store

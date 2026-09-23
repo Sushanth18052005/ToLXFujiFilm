@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Entry dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="topbar">
+    <strong>Dashboard</strong>
+    <span class="stats" id="stats">—</span>
+    <span><a href="/scan">Scanner</a> ·
+      <form method="post" action="/logout" style="display:inline">
+        <button class="ghost" style="padding:6px 10px;font-size:13px">Logout</button>
+      </form>
+    </span>
+  </div>
+
+  <div class="wrap" style="max-width:720px">
+    <input id="q" placeholder="Search by name or email…" style="width:100%;margin:8px 0 16px">
+    <div id="list"></div>
+  </div>
+
+  <script>
+    const statsEl = document.getElementById('stats');
+    const listEl = document.getElementById('list');
+    const qEl = document.getElementById('q');
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+        ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+
+    async function loadStats() {
+      const r = await fetch('/api/stats');
+      if (r.status === 401) return location.href = '/login';
+      const s = await r.json();
+      statsEl.textContent = `${s.entered} entered · ${s.remaining} remaining · ${s.total} total`;
+    }
+
+    async function loadList() {
+      const r = await fetch('/api/attendees?q=' + encodeURIComponent(qEl.value));
+      if (r.status === 401) return location.href = '/login';
+      const rows = await r.json();
+      listEl.innerHTML = rows.map(a => `
+        <div class="row">
+          <div>
+            <div>${esc(a.name)}</div>
+            <div class="muted" style="font-size:12px">${esc(a.email || '')}${a.entered_at ? ' · ' + esc(a.entered_at) + ' UTC' : ''}</div>
+          </div>
+          <div>
+            <span class="badge ${a.status}">${a.status}</span>
+            ${a.status === 'entered' ? `<button class="ghost" style="padding:6px 10px;font-size:12px;margin-left:8px" onclick="undo(${a.id})">Undo</button>` : ''}
+          </div>
+        </div>`).join('') || '<p class="muted">No matches.</p>';
+    }
+
+    async function undo(id) {
+      if (!confirm('Undo this entry so the person can check in again?')) return;
+      await fetch('/api/attendees/' + id + '/undo', { method: 'POST' });
+      loadStats(); loadList();
+    }
+
+    let t;
+    qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(loadList, 200); });
+    loadStats(); loadList();
+    setInterval(() => { loadStats(); loadList(); }, 15000);
+  </script>
+</body>
+</html>
