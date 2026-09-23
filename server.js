@@ -208,6 +208,7 @@ app.get('/api/attendees', session.requireStaff, async (req, res) => {
   const q = `%${String(req.query.q || '').toLowerCase()}%`;
   const status = String(req.query.status || '');
   const emailed = String(req.query.emailed || '');
+  const source = String(req.query.source || '');
   const params = [q, q];
   const where = [`(lower(name) LIKE $1 OR lower(COALESCE(email,'')) LIKE $2)`];
   if (status === 'entered' || status === 'registered') {
@@ -215,10 +216,16 @@ app.get('/api/attendees', session.requireStaff, async (req, res) => {
     where.push(`status = $${params.length}`);
   }
   if (emailed === 'yes') where.push(`email_sent_at IS NOT NULL`);
-  else if (emailed === 'no') where.push(`email_sent_at IS NULL`);
+  else if (emailed === 'no') where.push(`email_sent_at IS NULL AND email IS NOT NULL AND email <> ''`);
+  else if (emailed === 'resent') where.push(`resent = true`);
+  else if (emailed === 'none') where.push(`(email IS NULL OR email = '')`);
+  if (source === 'import' || source === 'manual') {
+    params.push(source);
+    where.push(`source = $${params.length}`);
+  }
   try {
     const { rows } = await query(
-      `SELECT id, name, email, status,
+      `SELECT id, name, email, status, resent,
          to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at,
          to_char(email_sent_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS email_sent_at
        FROM attendees
@@ -274,6 +281,45 @@ app.delete('/api/attendees/:id', session.requireStaff, async (req, res) => {
     res.json({ ok: info.rowCount === 1 });
   } catch (err) {
     console.error('delete error:', err.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// Clean array of integer ids from a JSON body { ids: [...] } (for bulk actions).
+function bodyIds(req) {
+  return Array.isArray(req.body && req.body.ids)
+    ? req.body.ids.map((n) => parseInt(n, 10)).filter(Number.isInteger)
+    : [];
+}
+
+// Bulk undo: return the selected 'entered' people to 'registered' so they can
+// re-enter. Only rows currently 'entered' are affected.
+app.post('/api/attendees/bulk-undo', session.requireStaff, async (req, res) => {
+  const ids = bodyIds(req);
+  if (!ids.length) return res.status(400).json({ ok: false, error: 'no ids' });
+  try {
+    const info = await query(
+      `UPDATE attendees SET status='registered', entered_at=NULL
+         WHERE id = ANY($1::bigint[]) AND status='entered'`,
+      [ids]
+    );
+    res.json({ ok: true, updated: info.rowCount });
+  } catch (err) {
+    console.error('bulk-undo error:', err.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// Bulk delete: remove the selected attendees and their scan logs.
+app.post('/api/attendees/bulk-delete', session.requireStaff, async (req, res) => {
+  const ids = bodyIds(req);
+  if (!ids.length) return res.status(400).json({ ok: false, error: 'no ids' });
+  try {
+    await query('DELETE FROM scans WHERE attendee_id = ANY($1::bigint[])', [ids]);
+    const info = await query('DELETE FROM attendees WHERE id = ANY($1::bigint[])', [ids]);
+    res.json({ ok: true, deleted: info.rowCount });
+  } catch (err) {
+    console.error('bulk-delete error:', err.message);
     res.status(500).json({ ok: false });
   }
 });

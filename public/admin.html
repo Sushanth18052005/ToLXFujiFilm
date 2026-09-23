@@ -58,15 +58,22 @@
     <input id="q" placeholder="Search by name or email…" style="width:100%;margin:8px 0 10px">
 
     <div class="controls" style="margin-bottom:12px">
-      <select id="fStatus" onchange="loadList()" style="flex:1;min-width:130px">
+      <select id="fStatus" onchange="loadList()" style="flex:1;min-width:120px">
         <option value="">All statuses</option>
         <option value="registered">Registered</option>
         <option value="entered">Entered</option>
       </select>
-      <select id="fEmailed" onchange="loadList()" style="flex:1;min-width:130px">
+      <select id="fEmailed" onchange="loadList()" style="flex:1;min-width:120px">
         <option value="">Any email status</option>
         <option value="no">Not emailed</option>
         <option value="yes">Emailed</option>
+        <option value="resent">Resent</option>
+        <option value="none">No email address</option>
+      </select>
+      <select id="fSource" onchange="loadList()" style="flex:1;min-width:120px">
+        <option value="">All sources</option>
+        <option value="import">Imported</option>
+        <option value="manual">Added manually</option>
       </select>
     </div>
 
@@ -76,8 +83,10 @@
       </label>
       <span class="muted" id="selCount" style="font-size:12px;letter-spacing:.03em">0 selected</span>
       <span style="flex:1"></span>
-      <button class="ghost btn-sm" id="selPreviewBtn" onclick="doSendSelected(true)" disabled>Preview selected</button>
-      <button class="btn-sm" id="selSendBtn" onclick="doSendSelected(false)" disabled>Email selected</button>
+      <button class="ghost btn-sm" id="selPreviewBtn" onclick="doSendSelected(true)" disabled>Preview</button>
+      <button class="btn-sm" id="selSendBtn" onclick="doSendSelected(false)" disabled>Email / resend</button>
+      <button class="ghost btn-sm" id="selUndoBtn" onclick="doBulkUndo()" disabled>Undo entry</button>
+      <button class="ghost btn-sm" id="selDeleteBtn" onclick="doBulkDelete()" disabled>Delete</button>
     </div>
 
     <div id="list"></div>
@@ -284,19 +293,22 @@
       if (qEl.value) params.set('q', qEl.value);
       const st = document.getElementById('fStatus').value;
       const em = document.getElementById('fEmailed').value;
+      const sr = document.getElementById('fSource').value;
       if (st) params.set('status', st);
       if (em) params.set('emailed', em);
+      if (sr) params.set('source', sr);
       const r = await fetch('/api/attendees?' + params.toString());
       if (r.status === 401) return location.href = '/login';
       const rows = await r.json();
       shownIds = rows.map(a => a.id);
       listEl.innerHTML = rows.map(a => {
         const checked = selected.has(a.id) ? ' checked' : '';
-        const emailBadge = a.email
-          ? (a.email_sent_at
+        const emailBadge = !a.email ? ''
+          : a.resent
+            ? `<span class="badge resent" title="Resent — last sent ${esc(a.email_sent_at)} IST">resent</span>`
+            : a.email_sent_at
               ? `<span class="badge emailed" title="Emailed ${esc(a.email_sent_at)} IST">emailed</span>`
-              : '<span class="badge notsent">not sent</span>')
-          : '';
+              : '<span class="badge notsent">not sent</span>';
         const meta = [
           a.email ? esc(a.email) : 'no email',
           a.entered_at ? esc(a.entered_at) + ' IST' : null,
@@ -330,10 +342,11 @@
     // --- individual selection ("email these specific people") ---
     function updateSelUI() {
       const n = selected.size;
-      document.getElementById('selCount').textContent =
-        n + ' selected' + (n ? ' — sends even if already emailed' : '');
-      document.getElementById('selPreviewBtn').disabled = busy || n === 0;
-      document.getElementById('selSendBtn').disabled = busy || n === 0;
+      document.getElementById('selCount').textContent = n + ' selected';
+      const dis = busy || n === 0;
+      for (const id of ['selPreviewBtn', 'selSendBtn', 'selUndoBtn', 'selDeleteBtn']) {
+        document.getElementById(id).disabled = dis;
+      }
       const selAll = document.getElementById('selAll');
       const shownSel = shownIds.filter(id => selected.has(id)).length;
       selAll.checked = shownIds.length > 0 && shownSel === shownIds.length;
@@ -391,6 +404,61 @@
         loadList();
       } catch (e) {
         log('Send error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function doBulkUndo() {
+      const ids = [...selected];
+      if (!ids.length) return alert('Tick at least one person.');
+      if (!confirm('Undo entry for ' + ids.length + ' selected '
+          + (ids.length === 1 ? 'person' : 'people')
+          + '?\n\nOnly people currently marked “entered” are changed back to “registered”, so they can check in again.')) return;
+      setBusy(true);
+      log('Undoing entry for ' + ids.length + ' selected…');
+      try {
+        const r = await fetch('/api/attendees/bulk-undo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        });
+        if (r.status === 401) return location.href = '/login';
+        const d = await parseJson(r);
+        if (!r.ok) { log('Undo failed: ' + (d.error || r.status)); return; }
+        log('Undid entry for ' + d.updated + ' ' + (d.updated === 1 ? 'person' : 'people') + '.');
+        selected.clear();
+        loadStats(); loadList();
+      } catch (e) {
+        log('Undo error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function doBulkDelete() {
+      const ids = [...selected];
+      if (!ids.length) return alert('Tick at least one person.');
+      if (!confirm('Delete ' + ids.length + ' selected '
+          + (ids.length === 1 ? 'person' : 'people')
+          + '?\n\nThis permanently removes them and their scan history. This cannot be undone.')) return;
+      if (ids.length >= 10 && !confirm('This is a large delete (' + ids.length + ' people). Are you absolutely sure?')) return;
+      setBusy(true);
+      log('Deleting ' + ids.length + ' selected…');
+      try {
+        const r = await fetch('/api/attendees/bulk-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        });
+        if (r.status === 401) return location.href = '/login';
+        const d = await parseJson(r);
+        if (!r.ok) { log('Delete failed: ' + (d.error || r.status)); return; }
+        log('Deleted ' + d.deleted + ' ' + (d.deleted === 1 ? 'person' : 'people') + '.');
+        selected.clear();
+        loadStats(); loadList();
+      } catch (e) {
+        log('Delete error: ' + e.message);
       } finally {
         setBusy(false);
       }
