@@ -47,7 +47,7 @@ function showResult(data) {
   } else if (data.result === 'already') {
     titleEl.textContent = '✕ ALREADY ENTERED';
     nameEl.textContent = a ? a.name : '';
-    detailEl.textContent = a && a.entered_at ? 'First entry: ' + a.entered_at + ' UTC' : 'Entry denied.';
+    detailEl.textContent = a && a.entered_at ? 'First entry: ' + a.entered_at + ' IST' : 'Entry denied.';
     beep(false);
   } else {
     titleEl.textContent = '✕ INVALID CODE';

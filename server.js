@@ -28,7 +28,7 @@ app.use((req, res, next) => {
 // ---------- SQL ----------
 const SQL_CLAIM = `UPDATE attendees SET status='entered', entered_at=now() WHERE token=$1 AND status='registered'`;
 const SQL_GET = `SELECT id, name, email, status,
-    to_char(entered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS entered_at, extra
+    to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at, extra
   FROM attendees WHERE token=$1`;
 const SQL_LOG = `INSERT INTO scans (attendee_id, token, result, ip) VALUES ($1,$2,$3,$4)`;
 const SQL_UNDO = `UPDATE attendees SET status='registered', entered_at=NULL WHERE id=$1`;
@@ -207,7 +207,7 @@ app.get('/api/attendees', session.requireStaff, async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT id, name, email, status,
-         to_char(entered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS entered_at
+         to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at
        FROM attendees
        WHERE lower(name) LIKE $1 OR lower(COALESCE(email,'')) LIKE $2
        ORDER BY entered_at DESC NULLS LAST, name LIMIT 200`,
