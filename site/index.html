@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Interactive Photography Workshop — Traces of Lenses × Fujifilm</title>
+  <meta name="description" content="A Fujifilm photography workshop by Traces of Lenses (ToL), KMIT. Learn from industry professional Mr. Bobz Choudhari. 26 September 2026, Sardar Vallabhbhai Patel Auditorium, KMIT. Open for all colleges — Entry ₹100.">
+  <meta name="theme-color" content="#000000">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Interactive Photography Workshop — Traces of Lenses × Fujifilm">
+  <meta property="og:description" content="See · Frame · Create. A new way to see — 26 September 2026, KMIT. Open for all colleges, Entry ₹100.">
+  <meta property="og:image" content="img/guest-camera.jpg">
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23e4002b' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23e4002b'/%3E%3C/svg%3E">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script>document.documentElement.className = document.documentElement.className.replace('no-js','js');</script>
+</head>
+<body>
+  <!-- Loader -->
+  <div class="loader" id="loader" aria-hidden="true">
+    <div class="loader__aperture">
+      <span></span><span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="loader__meta">
+      <span class="loader__brand">TRACES OF LENSES <i>×</i> FUJIFILM</span>
+      <span class="loader__count"><b id="loaderPct">0</b>%</span>
+    </div>
+  </div>
+
+  <!-- Fixed WebGL stage (the 3D camera lives here) -->
+  <div class="stage" id="stage" aria-hidden="true">
+    <div class="stage__fallback" style="background-image:url('img/guest-camera.jpg')"></div>
+    <canvas id="gl"></canvas>
+    <div class="stage__vignette"></div>
+  </div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- Header -->
+  <header class="nav" id="nav">
+    <a class="nav__brand" href="#top">
+      <span class="nav__mark">ToL</span>
+      <span class="nav__lock">Traces of Lenses <i>×</i> Fujifilm</span>
+    </a>
+    <nav class="nav__links" aria-label="Primary">
+      <a href="#workshop">Workshop</a>
+      <a href="#speaker">Speaker</a>
+      <a href="#details">Details</a>
+    </nav>
+    <a href="#register" class="btn btn--pill nav__cta" data-register>Register</a>
+  </header>
+
+  <main id="top">
+    <!-- ===== 3D SCROLL ACT ===== -->
+    <div class="scroll3d" id="scroll3d">
+
+      <!-- Beat 1 — Hero -->
+      <section class="hero beat" data-beat="1">
+        <div class="hero__inner">
+          <p class="eyebrow eyebrow--red reveal" data-rev>Fujifilm</p>
+          <h1 class="hero__title">
+            <span class="hero__title-lead reveal" data-rev>Interactive</span>
+            <span class="reveal" data-rev>Photography</span>
+            <span class="reveal" data-rev>Workshop</span>
+          </h1>
+          <p class="hero__tagline reveal" data-rev>See <i>·</i> Frame <i>·</i> Create</p>
+          <ul class="hero__facts reveal" data-rev>
+            <li><b>26 September 2026</b></li>
+            <li>12:00 PM — 5:00 PM</li>
+            <li>Sardar Vallabhbhai Patel Auditorium, KMIT</li>
+          </ul>
+          <div class="hero__actions reveal" data-rev>
+            <a href="#register" class="btn btn--red" data-register>Register</a>
+            <span class="hero__price">Open for all colleges</span>
+          </div>
+        </div>
+        <div class="scrollcue" aria-hidden="true"><span>Scroll</span><i></i></div>
+      </section>
+
+      <!-- Beat 2 — Statement -->
+      <section class="beat beat--statement" data-beat="2">
+        <div class="statement">
+          <p class="eyebrow eyebrow--red" data-beat-rev>One afternoon.</p>
+          <h2 class="statement__title" data-beat-rev>A new way<br>to see.</h2>
+          <p class="statement__sub" data-beat-rev>Photography is more than a camera — it is how you choose to look.</p>
+        </div>
+      </section>
+
+      <!-- Beat 3 — Product caption -->
+      <section class="beat beat--product" data-beat="3">
+        <div class="product__cap product__cap--left" data-beat-rev>
+          <span class="tick">01 — Optics</span>
+          <p>Fujinon glass, built to render light the way your eye remembers it.</p>
+        </div>
+        <div class="product__cap product__cap--right" data-beat-rev>
+          <span class="tick">02 — Craft</span>
+          <p>Analogue dials, digital soul. A tool that rewards intention.</p>
+        </div>
+      </section>
+    </div>
+    <!-- Marquee -->
+    <div class="marquee" aria-hidden="true">
+      <div class="marquee__track">
+        <span>See · Frame · Create</span><i>✳</i>
+        <span>Traces of Lenses × Fujifilm</span><i>✳</i>
+        <span>Interactive Photography Workshop</span><i>✳</i>
+        <span>26 September 2026 · KMIT</span><i>✳</i>
+        <span>See · Frame · Create</span><i>✳</i>
+        <span>Traces of Lenses × Fujifilm</span><i>✳</i>
+        <span>Interactive Photography Workshop</span><i>✳</i>
+        <span>26 September 2026 · KMIT</span><i>✳</i>
+      </div>
+    </div>
+
+    <!-- ===== WORKSHOP / SPEAKER (light) ===== -->
+    <section class="section section--light workshop" id="workshop">
+      <div class="wrap">
+        <header class="sec-head" data-rev>
+          <p class="eyebrow eyebrow--red">The Workshop</p>
+          <h2 class="sec-head__title">Learn from an<br>industry professional</h2>
+        </header>
+
+        <div class="speaker" id="speaker">
+          <figure class="speaker__photo" data-rev>
+            <img src="img/guest-camera.jpg" alt="Mr. Bobz Choudhari holding a Fujifilm X-series camera in front of the Fujifilm X logo" loading="lazy" decoding="async">
+            <figcaption>Fujifilm X-Series</figcaption>
+          </figure>
+
+          <div class="speaker__body">
+            <p class="eyebrow eyebrow--red" data-rev>Chief Guest</p>
+            <h3 class="speaker__name" data-rev>Mr. Bobz<br>Choudhari</h3>
+            <p class="speaker__role" data-rev>Fujifilm Brand Ambassador</p>
+            <p class="speaker__lede" data-rev>A photography workshop by Traces of Lenses (ToL), KMIT, in collaboration with Fujifilm. Designed to give students valuable insights, practical knowledge and hands-on exposure to photography techniques and practices.</p>
+
+            <div class="pillars" data-rev>
+              <span class="pillars__item is-red">Practical knowledge.</span>
+              <span class="pillars__item">Creative exploration.</span>
+              <span class="pillars__item">Hands-on exposure.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- What to expect -->
+        <div class="expect" id="expect">
+          <p class="eyebrow eyebrow--red" data-rev>What to expect</p>
+          <ol class="expect__grid">
+            <li class="expect__item" data-rev>
+              <span class="expect__no">01</span>
+              <p class="expect__t">Industry-led insights</p>
+              <p class="expect__d">Learn directly from a Fujifilm brand ambassador and working professional.</p>
+            </li>
+            <li class="expect__item" data-rev>
+              <span class="expect__no">02</span>
+              <p class="expect__t">Practical techniques</p>
+              <p class="expect__d">Hands-on guidance on light, composition and camera craft.</p>
+            </li>
+            <li class="expect__item" data-rev>
+              <span class="expect__no">03</span>
+              <p class="expect__t">Hands-on session</p>
+              <p class="expect__d">Put technique into practice with the camera in your hands.</p>
+            </li>
+            <li class="expect__item" data-rev>
+              <span class="expect__no">04</span>
+              <p class="expect__t">Photography contest</p>
+              <p class="expect__d">Compete after the workshop for exclusive prizes.</p>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </section>
+    <!-- ===== GALLERY (dark) ===== -->
+    <section class="section section--dark gallery" id="gallery">
+      <div class="wrap">
+        <header class="sec-head sec-head--split" data-rev>
+          <div>
+            <p class="eyebrow eyebrow--red">In frame</p>
+            <h2 class="sec-head__title">Moments,<br>not just images.</h2>
+          </div>
+          <p class="sec-head__note">A session led with intent — light, composition and the quiet decisions that make a photograph.</p>
+        </header>
+
+        <div class="grid">
+          <figure class="grid__cell" data-parallax>
+            <img src="img/spotlight.jpg" alt="Portrait under a single spotlight" loading="lazy" decoding="async">
+            <figcaption><span>A new way to see</span></figcaption>
+          </figure>
+          <figure class="grid__cell" data-parallax>
+            <img src="img/profile.jpg" alt="Profile portrait" loading="lazy" decoding="async">
+            <figcaption><span>Frame</span></figcaption>
+          </figure>
+          <figure class="grid__cell" data-parallax>
+            <img src="img/hero-stool.jpg" alt="Full portrait seated with a microphone" loading="lazy" decoding="async">
+            <figcaption><span>See</span></figcaption>
+          </figure>
+          <figure class="grid__cell grid__cell--wide" data-parallax>
+            <img src="img/talk.jpg" alt="Speaking at the podium during a session" loading="lazy" decoding="async">
+            <figcaption><span>Create</span></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== DETAILS (dark) ===== -->
+    <section class="section section--dark details" id="details">
+      <div class="wrap">
+        <header class="sec-head" data-rev>
+          <p class="eyebrow eyebrow--red">Plan your visit</p>
+          <h2 class="sec-head__title">The details.</h2>
+        </header>
+
+        <div class="facts" data-rev>
+          <div class="facts__col"><span class="facts__k">Date</span><span class="facts__v">26 September 2026</span></div>
+          <div class="facts__col"><span class="facts__k">Time</span><span class="facts__v">12:00 PM — 5:00 PM</span></div>
+          <div class="facts__col"><span class="facts__k">Venue</span><span class="facts__v">Sardar Vallabhbhai Patel Auditorium, KMIT</span></div>
+        </div>
+
+        <div class="venue-map" data-rev>
+          <a class="btn btn--pill venue-map__cta" href="https://maps.app.goo.gl/QQPSdsV7T3WL6H4P9?g_st=ac" target="_blank" rel="noopener">Click here for location ↗</a>
+        </div>
+
+        <div class="highlights" data-rev>
+          <p class="eyebrow eyebrow--red">Event highlights</p>
+          <h3 class="highlights__title">Fujifilm Photography Workshop</h3>
+          <p class="highlights__org">Organized by Traces of Lenses (ToL), KMIT</p>
+          <ul class="highlights__list">
+            <li>Open for all colleges</li>
+            <li>Entry Fee — ₹100</li>
+            <li>Exclusive prizes for winners</li>
+            <li>Wrist band + participation certificate</li>
+          </ul>
+        </div>
+
+        <div class="contest" data-rev>Photography contest <i>·</i> after the workshop</div>
+      </div>
+    </section>
+
+    <!-- ===== REGISTER (final CTA) ===== -->
+    <section class="section register" id="register">
+      <div class="wrap register__inner">
+        <p class="eyebrow eyebrow--red" data-rev>See · Frame · Create</p>
+        <h2 class="register__title" data-rev>Secure<br>your spot.</h2>
+        <p class="register__sub" data-rev>Open for all colleges. Wrist band and participation certificate included.</p>
+        <!-- Set REGISTER_URL to your registration form (e.g. a Google Form). Falls back to details when empty. -->
+        <a class="btn btn--red btn--lg" id="registerBtn" href="#details" data-register data-rev>Register now</a>
+        <p class="register__fine" data-rev>Sardar Vallabhbhai Patel Auditorium, KMIT · 26 September 2026</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer__inner">
+      <div class="footer__brand">
+        <span class="footer__lock">Traces of Lenses <i>×</i> Fujifilm <em>| KMIT</em></span>
+        <span class="footer__club">KMIT · Photography and Videography Club</span>
+        <a class="footer__ig" href="https://www.instagram.com/tracesoflenses?utm_source=ig_web_button_share_sheet&amp;stkn=ZDNlZDc0MzIxNw==" target="_blank" rel="noopener" aria-label="Follow Traces of Lenses on Instagram">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2.5" y="2.5" width="19" height="19" rx="5.5"/><circle cx="12" cy="12" r="4.2"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>
+          <span>@tracesoflenses</span>
+        </a>
+      </div>
+      <div class="footer__meta">
+        <span>Wrist bands · Participation certificates</span>
+        <a href="#top" class="footer__top">Back to top ↑</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.14/dist/lenis.min.js"></script>
+  <!-- Last-resort reveal: if the module never boots (parse/CDN failure), un-hide content. -->
+  <script>addEventListener('load',function(){setTimeout(function(){if(!window.__site_booted)document.documentElement.classList.add('reveal-all');},3200);});</script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
