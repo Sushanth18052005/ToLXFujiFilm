@@ -74,7 +74,11 @@ function loginPage(next, error) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title> ${esc(config.eventName)}</title>
-<link rel="stylesheet" href="/styles.css"></head>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/img/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/img/favicon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/img/favicon-512.png">
+<link rel="apple-touch-icon" href="/img/apple-touch-icon.png"></head>
 <body class="center">
   <div class="login">
     <div class="login__media">
