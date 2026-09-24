@@ -86,6 +86,7 @@
       <button class="ghost btn-sm" id="selPreviewBtn" onclick="doSendSelected(true)" disabled>Preview</button>
       <button class="btn-sm" id="selSendBtn" onclick="doSendSelected(false)" disabled>Email / resend</button>
       <button class="ghost btn-sm" id="selUndoBtn" onclick="doBulkUndo()" disabled>Undo entry</button>
+      <button class="ghost btn-sm" id="selRegenBtn" onclick="doBulkRegen()" disabled>Regen QR</button>
       <button class="ghost btn-sm" id="selDeleteBtn" onclick="doBulkDelete()" disabled>Delete</button>
     </div>
 
@@ -105,6 +106,8 @@
     const selected = new Set();
     let shownIds = [];   // ids currently rendered (drives "select all shown")
     let busy = false;    // an import/send/etc. is running — disables action buttons
+    let locks = {};      // which actions need the organizer password (from /api/locks)
+    let orgPin = '';     // organizer password, cached in memory for this page session
 
     function esc(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
@@ -136,19 +139,90 @@
       }
     }
 
+    // Which sensitive actions are locked behind the organizer password. The server
+    // enforces this regardless; this only lets us prompt for the password up front
+    // and skip prompting for actions that are open.
+    async function loadLocks() {
+      try {
+        const r = await fetch('/api/locks');
+        if (r.status === 401) return location.href = '/login';
+        if (r.ok) locks = await r.json();
+      } catch { /* keep defaults; the server still enforces the gate */ }
+    }
+
+    // Build the header a gated action needs. Returns {} when the action is open,
+    // { 'X-Organizer-Password': ... } when locked (prompting once and caching the
+    // password for the page session), or null when the user cancels the prompt —
+    // callers must treat null as "abort, do nothing".
+    function orgHeaders(action) {
+      if (!locks[action]) return {};
+      if (!orgPin) {
+        const pin = prompt('Organizer password required for this action:');
+        if (pin == null || pin === '') return null;
+        orgPin = pin;
+      }
+      return { 'X-Organizer-Password': orgPin };
+    }
+
+    // Handle a 403 from a gated action. Returns true (and logs) if it was a lock
+    // rejection, so the caller can stop. A wrong/absent password is forgotten so
+    // the next attempt re-prompts.
+    function lockRejected(d, r) {
+      if (r.status !== 403) return false;
+      const err = d && d.error;
+      if (err === 'bad_password') {
+        orgPin = '';
+        log('Wrong organizer password. Try the action again.');
+      } else if (err === 'unlock_required') {
+        orgPin = '';
+        log('Organizer password required. Try the action again.');
+      } else if (err === 'not_configured') {
+        log('This action is locked but no organizer password is set on the server. Ask the organizer to set ORGANIZER_PASSWORD.');
+      } else {
+        log('Action not allowed (HTTP 403).');
+      }
+      return true;
+    }
+
+    // After a regenerate, offer to email the fresh QR to those people right away.
+    // ids = the just-regenerated attendees; sending is not gated and targets these
+    // ids regardless of prior email state (reuses the background send + poll flow).
+    async function offerResend(ids, label) {
+      if (!ids || !ids.length) return;
+      if (!confirm('Resend the new QR to ' + label + ' now?')) return;
+      log('Sending new QR to ' + label + '…');
+      try {
+        const r = await fetch('/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        });
+        if (r.status === 401) return location.href = '/login';
+        const d = await parseJson(r);
+        if (r.status === 409) log('A send is already in progress — tracking it…');
+        else if (!r.ok) { log('Send failed: ' + (d.error || r.status)); return; }
+        await pollSend();
+      } catch (e) {
+        log('Send error: ' + e.message);
+      }
+    }
+
     async function addAttendee() {
       const name = document.getElementById('newName').value.trim();
       const email = document.getElementById('newEmail').value.trim();
       if (!name) return alert('Enter a name.');
+      const headers = orgHeaders('add');
+      if (headers === null) return;
       setBusy(true);
       try {
         const r = await fetch('/api/attendees', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ name, email }),
         });
         if (r.status === 401) return location.href = '/login';
         const d = await parseJson(r);
+        if (lockRejected(d, r)) return;
         if (!r.ok) { log('Add failed: ' + (d.error || r.status)); return; }
         log('Added ' + name + (email ? ' <' + email + '>' : '') + '.');
         document.getElementById('newName').value = '';
@@ -163,9 +237,19 @@
 
     async function delAttendee(id, name) {
       if (!confirm('Delete ' + name + '? This removes them and their scan history.')) return;
-      const r = await fetch('/api/attendees/' + id, { method: 'DELETE' });
-      if (r.status === 401) return location.href = '/login';
-      loadStats(); loadList();
+      const headers = orgHeaders('delete');
+      if (headers === null) return;
+      try {
+        const r = await fetch('/api/attendees/' + id, { method: 'DELETE', headers });
+        if (r.status === 401) return location.href = '/login';
+        const d = await parseJson(r);
+        if (lockRejected(d, r)) return;
+        if (!r.ok || !d.ok) { log('Delete failed: ' + (d.error || r.status)); return; }
+        log('Deleted ' + name + '.');
+        loadStats(); loadList();
+      } catch (e) {
+        log('Delete error: ' + e.message);
+      }
     }
 
     async function doImport() {
@@ -309,23 +393,25 @@
             : a.email_sent_at
               ? `<span class="badge emailed" title="Emailed ${esc(a.email_sent_at)} IST">emailed</span>`
               : '<span class="badge notsent">not sent</span>';
-        const meta = [
-          a.email ? esc(a.email) : 'no email',
-          a.entered_at ? esc(a.entered_at) + ' IST' : null,
-        ].filter(Boolean).join(' · ');
+        const contact = a.email ? esc(a.email) : 'no email';
+        const enteredLine = a.entered_at
+          ? `<div class="muted" style="font-size:12px">Entered ${esc(a.entered_at)} IST</div>`
+          : '';
         return `
         <div class="row">
           <div style="display:flex;align-items:center;gap:10px;min-width:0">
             <input type="checkbox" class="sel" data-id="${a.id}"${checked} aria-label="Select ${esc(a.name)}">
             <div style="min-width:0">
               <div>${esc(a.name)}</div>
-              <div class="muted" style="font-size:12px">${meta}</div>
+              <div class="muted" style="font-size:12px">${contact}</div>
+              ${enteredLine}
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
             ${emailBadge}
             <span class="badge ${a.status}">${a.status}</span>
             ${a.status === 'entered' ? `<button class="ghost btn-sm" onclick="undo(${a.id})">Undo</button>` : ''}
+            <button class="ghost btn-sm" onclick="regenQr(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Regen QR</button>
             <button class="ghost btn-sm" onclick="delAttendee(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Delete</button>
           </div>
         </div>`;
@@ -335,8 +421,41 @@
 
     async function undo(id) {
       if (!confirm('Undo this entry so the person can check in again?')) return;
-      await fetch('/api/attendees/' + id + '/undo', { method: 'POST' });
-      loadStats(); loadList();
+      const headers = orgHeaders('undo');
+      if (headers === null) return;
+      try {
+        const r = await fetch('/api/attendees/' + id + '/undo', { method: 'POST', headers });
+        if (r.status === 401) return location.href = '/login';
+        const d = await parseJson(r);
+        if (lockRejected(d, r)) return;
+        if (!r.ok || !d.ok) { log('Undo failed: ' + (d.error || r.status)); return; }
+        loadStats(); loadList();
+      } catch (e) {
+        log('Undo error: ' + e.message);
+      }
+    }
+
+    // Rotate an attendee's token → a brand-new QR, invalidating the old one. Also
+    // clears their email state so they resurface as "not sent" and can be re-emailed.
+    async function regenQr(id, name) {
+      if (!confirm('Regenerate the QR for ' + name + '?\n\nThis issues a new code and INVALIDATES their current QR — any pass already sent will stop working. They will show as "not sent" so you can email them the new one.')) return;
+      const headers = orgHeaders('regen');
+      if (headers === null) return;
+      setBusy(true);
+      try {
+        const r = await fetch('/api/attendees/' + id + '/regenerate', { method: 'POST', headers });
+        if (r.status === 401) return location.href = '/login';
+        const d = await parseJson(r);
+        if (lockRejected(d, r)) return;
+        if (!r.ok || !d.ok) { log('Regenerate failed: ' + (d.error || r.status)); return; }
+        log('New QR generated for ' + name + '. They now show as "not sent".');
+        loadStats(); loadList();
+        await offerResend([id], name);
+      } catch (e) {
+        log('Regenerate error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
     }
 
     // --- individual selection ("email these specific people") ---
@@ -344,7 +463,7 @@
       const n = selected.size;
       document.getElementById('selCount').textContent = n + ' selected';
       const dis = busy || n === 0;
-      for (const id of ['selPreviewBtn', 'selSendBtn', 'selUndoBtn', 'selDeleteBtn']) {
+      for (const id of ['selPreviewBtn', 'selSendBtn', 'selUndoBtn', 'selRegenBtn', 'selDeleteBtn']) {
         document.getElementById(id).disabled = dis;
       }
       const selAll = document.getElementById('selAll');
@@ -415,16 +534,19 @@
       if (!confirm('Undo entry for ' + ids.length + ' selected '
           + (ids.length === 1 ? 'person' : 'people')
           + '?\n\nOnly people currently marked “entered” are changed back to “registered”, so they can check in again.')) return;
+      const headers = orgHeaders('undo');
+      if (headers === null) return;
       setBusy(true);
       log('Undoing entry for ' + ids.length + ' selected…');
       try {
         const r = await fetch('/api/attendees/bulk-undo', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ ids }),
         });
         if (r.status === 401) return location.href = '/login';
         const d = await parseJson(r);
+        if (lockRejected(d, r)) return;
         if (!r.ok) { log('Undo failed: ' + (d.error || r.status)); return; }
         log('Undid entry for ' + d.updated + ' ' + (d.updated === 1 ? 'person' : 'people') + '.');
         selected.clear();
@@ -443,16 +565,19 @@
           + (ids.length === 1 ? 'person' : 'people')
           + '?\n\nThis permanently removes them and their scan history. This cannot be undone.')) return;
       if (ids.length >= 10 && !confirm('This is a large delete (' + ids.length + ' people). Are you absolutely sure?')) return;
+      const headers = orgHeaders('delete');
+      if (headers === null) return;
       setBusy(true);
       log('Deleting ' + ids.length + ' selected…');
       try {
         const r = await fetch('/api/attendees/bulk-delete', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ ids }),
         });
         if (r.status === 401) return location.href = '/login';
         const d = await parseJson(r);
+        if (lockRejected(d, r)) return;
         if (!r.ok) { log('Delete failed: ' + (d.error || r.status)); return; }
         log('Deleted ' + d.deleted + ' ' + (d.deleted === 1 ? 'person' : 'people') + '.');
         selected.clear();
@@ -464,9 +589,41 @@
       }
     }
 
+    async function doBulkRegen() {
+      const ids = [...selected];
+      if (!ids.length) return alert('Tick at least one person.');
+      if (!confirm('Regenerate the QR for ' + ids.length + ' selected '
+          + (ids.length === 1 ? 'person' : 'people')
+          + '?\n\nEach gets a new code and their current QR is INVALIDATED — any pass already sent stops working. They will show as “not sent” so you can email the new ones.')) return;
+      const headers = orgHeaders('regen');
+      if (headers === null) return;
+      setBusy(true);
+      log('Regenerating QR for ' + ids.length + ' selected…');
+      try {
+        const r = await fetch('/api/attendees/bulk-regenerate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ ids }),
+        });
+        if (r.status === 401) return location.href = '/login';
+        const d = await parseJson(r);
+        if (lockRejected(d, r)) return;
+        if (!r.ok) { log('Regenerate failed: ' + (d.error || r.status)); return; }
+        const label = d.updated + ' ' + (d.updated === 1 ? 'person' : 'people');
+        log('Regenerated QR for ' + label + '. They now show as “not sent”.');
+        selected.clear();
+        loadStats(); loadList();
+        await offerResend(ids, label);
+      } catch (e) {
+        log('Regenerate error: ' + e.message);
+      } finally {
+        setBusy(false);
+      }
+    }
+
     let t;
     qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(loadList, 200); });
-    loadStats(); loadList();
+    loadLocks(); loadStats(); loadList();
     setInterval(() => { loadStats(); loadList(); }, 15000);
   </script>
 </body>

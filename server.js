@@ -32,7 +32,7 @@ const SQL_GET = `SELECT id, name, email, status,
     to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at, extra
   FROM attendees WHERE token=$1`;
 const SQL_LOG = `INSERT INTO scans (attendee_id, token, result, ip) VALUES ($1,$2,$3,$4)`;
-const SQL_UNDO = `UPDATE attendees SET status='registered', entered_at=NULL WHERE id=$1`;
+const SQL_UNDO = `UPDATE attendees SET status='registered', entered_at=NULL WHERE id=$1 RETURNING name, email`;
 
 function publicView(a) {
   let extra = {};
@@ -117,6 +117,53 @@ function noteFail(ip) {
   const rec = attempts.get(ip);
   if (!rec || now - rec.first > 15 * 60 * 1000) attempts.set(ip, { count: 1, first: now });
   else rec.count++;
+}
+
+// ---------- organizer-password gate for sensitive actions ----------
+// Middleware factory. An action whose ALLOW_* flag is left open (config.locks
+// false) passes straight through with just the staff login. A LOCKED action
+// requires the organizer password in the `X-Organizer-Password` header:
+//   - not_configured : action is locked but ORGANIZER_PASSWORD is blank → fail
+//                       closed (blocked for everyone until it's set).
+//   - unlock_required : locked and no password was sent.
+//   - bad_password    : locked and the password was wrong.
+function requireUnlock(action) {
+  return (req, res, next) => {
+    if (!config.locks[action]) return next();
+    if (!config.organizerPassword) {
+      return res.status(403).json({ ok: false, error: 'not_configured' });
+    }
+    const pw = req.get('x-organizer-password') || '';
+    if (!pw) return res.status(403).json({ ok: false, error: 'unlock_required' });
+    if (session.checkOrganizer(pw)) return next();
+    return res.status(403).json({ ok: false, error: 'bad_password' });
+  };
+}
+
+// Append rows to the tamper-evident audit_log. Batched (one INSERT) and never
+// throws into the request path — a logging failure must not fail the action, so
+// errors are only logged to the console. `entries` is an array of
+// { action, attendee_id, name, email, detail }.
+async function audit(entries, ip) {
+  if (!entries || !entries.length) return;
+  try {
+    await query(
+      `INSERT INTO audit_log (action, attendee_id, name, email, detail, ip)
+       SELECT action, attendee_id, name, email, detail, $6::text
+         FROM unnest($1::text[], $2::bigint[], $3::text[], $4::text[], $5::text[])
+           AS t(action, attendee_id, name, email, detail)`,
+      [
+        entries.map((e) => e.action),
+        entries.map((e) => (Number.isInteger(e.attendee_id) ? e.attendee_id : null)),
+        entries.map((e) => e.name ?? null),
+        entries.map((e) => e.email ?? null),
+        entries.map((e) => e.detail ?? null),
+        ip || null,
+      ]
+    );
+  } catch (err) {
+    console.error('audit log error:', err.message);
+  }
 }
 
 // ---------- routes ----------
@@ -204,6 +251,12 @@ app.get('/api/stats', session.requireStaff, async (req, res) => {
   }
 });
 
+// Which sensitive actions are locked behind the organizer password. The admin
+// page reads this so it only prompts for the password on actions that need it.
+app.get('/api/locks', session.requireStaff, (req, res) => {
+  res.json(config.locks);
+});
+
 app.get('/api/attendees', session.requireStaff, async (req, res) => {
   const q = `%${String(req.query.q || '').toLowerCase()}%`;
   const status = String(req.query.status || '');
@@ -241,9 +294,15 @@ app.get('/api/attendees', session.requireStaff, async (req, res) => {
 });
 
 // Staff correction: undo an accidental entry so the person can re-enter.
-app.post('/api/attendees/:id/undo', session.requireStaff, async (req, res) => {
+app.post('/api/attendees/:id/undo', session.requireStaff, requireUnlock('undo'), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'bad id' });
   try {
-    const info = await query(SQL_UNDO, [parseInt(req.params.id, 10)]);
+    const info = await query(SQL_UNDO, [id]);
+    if (info.rowCount === 1) {
+      const a = info.rows[0];
+      await audit([{ action: 'undo', attendee_id: id, name: a.name, email: a.email, detail: 'single' }], req.ip);
+    }
     res.json({ ok: info.rowCount === 1 });
   } catch (err) {
     console.error('undo error:', err.message);
@@ -251,8 +310,35 @@ app.post('/api/attendees/:id/undo', session.requireStaff, async (req, res) => {
   }
 });
 
+// Re-issue an attendee's QR: assign a fresh token (the QR is derived from it, so
+// this makes a new code and INVALIDATES the old one) and clear their email state
+// so they resurface as "not sent" and can be re-emailed. Use when a QR didn't
+// generate/arrive or a code needs to be reset.
+app.post('/api/attendees/:id/regenerate', session.requireStaff, requireUnlock('regen'), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'bad id' });
+  try {
+    const info = await query(
+      `UPDATE attendees
+          SET token = $2, email_sent_at = NULL, resent = false,
+              regen_count = regen_count + 1, regenerated_at = now()
+        WHERE id = $1
+        RETURNING name, email`,
+      [id, newToken()]
+    );
+    if (info.rowCount === 1) {
+      const a = info.rows[0];
+      await audit([{ action: 'regenerate', attendee_id: id, name: a.name, email: a.email, detail: 'single' }], req.ip);
+    }
+    res.json({ ok: info.rowCount === 1 });
+  } catch (err) {
+    console.error('regenerate error:', err.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
 // Add a single attendee by hand (assigns a token, like the importer does).
-app.post('/api/attendees', session.requireStaff, async (req, res) => {
+app.post('/api/attendees', session.requireStaff, requireUnlock('add'), async (req, res) => {
   const name = String((req.body && req.body.name) || '').trim();
   const email = String((req.body && req.body.email) || '').trim().toLowerCase();
   if (!name) return res.status(400).json({ error: 'Name is required.' });
@@ -261,6 +347,7 @@ app.post('/api/attendees', session.requireStaff, async (req, res) => {
       `INSERT INTO attendees (name, email, extra, token, source) VALUES ($1, $2, $3, $4, 'manual') RETURNING id`,
       [name, email || null, '{}', newToken()]
     );
+    await audit([{ action: 'add', attendee_id: rows[0].id, name, email: email || null, detail: 'manual' }], req.ip);
     res.json({ ok: true, id: rows[0].id });
   } catch (err) {
     if (err.code === '23505') {
@@ -272,12 +359,16 @@ app.post('/api/attendees', session.requireStaff, async (req, res) => {
 });
 
 // Delete an attendee (and their scan logs).
-app.delete('/api/attendees/:id', session.requireStaff, async (req, res) => {
+app.delete('/api/attendees/:id', session.requireStaff, requireUnlock('delete'), async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'bad id' });
   try {
     await query('DELETE FROM scans WHERE attendee_id = $1', [id]);
-    const info = await query('DELETE FROM attendees WHERE id = $1', [id]);
+    const info = await query('DELETE FROM attendees WHERE id = $1 RETURNING name, email', [id]);
+    if (info.rowCount === 1) {
+      const a = info.rows[0];
+      await audit([{ action: 'delete', attendee_id: id, name: a.name, email: a.email, detail: 'single' }], req.ip);
+    }
     res.json({ ok: info.rowCount === 1 });
   } catch (err) {
     console.error('delete error:', err.message);
@@ -294,14 +385,19 @@ function bodyIds(req) {
 
 // Bulk undo: return the selected 'entered' people to 'registered' so they can
 // re-enter. Only rows currently 'entered' are affected.
-app.post('/api/attendees/bulk-undo', session.requireStaff, async (req, res) => {
+app.post('/api/attendees/bulk-undo', session.requireStaff, requireUnlock('undo'), async (req, res) => {
   const ids = bodyIds(req);
   if (!ids.length) return res.status(400).json({ ok: false, error: 'no ids' });
   try {
     const info = await query(
       `UPDATE attendees SET status='registered', entered_at=NULL
-         WHERE id = ANY($1::bigint[]) AND status='entered'`,
+         WHERE id = ANY($1::bigint[]) AND status='entered'
+         RETURNING id, name, email`,
       [ids]
+    );
+    await audit(
+      info.rows.map((r) => ({ action: 'undo', attendee_id: r.id, name: r.name, email: r.email, detail: 'bulk' })),
+      req.ip
     );
     res.json({ ok: true, updated: info.rowCount });
   } catch (err) {
@@ -311,15 +407,48 @@ app.post('/api/attendees/bulk-undo', session.requireStaff, async (req, res) => {
 });
 
 // Bulk delete: remove the selected attendees and their scan logs.
-app.post('/api/attendees/bulk-delete', session.requireStaff, async (req, res) => {
+app.post('/api/attendees/bulk-delete', session.requireStaff, requireUnlock('delete'), async (req, res) => {
   const ids = bodyIds(req);
   if (!ids.length) return res.status(400).json({ ok: false, error: 'no ids' });
   try {
     await query('DELETE FROM scans WHERE attendee_id = ANY($1::bigint[])', [ids]);
-    const info = await query('DELETE FROM attendees WHERE id = ANY($1::bigint[])', [ids]);
+    const info = await query('DELETE FROM attendees WHERE id = ANY($1::bigint[]) RETURNING id, name, email', [ids]);
+    await audit(
+      info.rows.map((r) => ({ action: 'delete', attendee_id: r.id, name: r.name, email: r.email, detail: 'bulk' })),
+      req.ip
+    );
     res.json({ ok: true, deleted: info.rowCount });
   } catch (err) {
     console.error('bulk-delete error:', err.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// Bulk regenerate: rotate the token for each selected attendee (a new QR each,
+// old ones invalidated) and reset their email state so they resurface as "not
+// sent". Done in one statement — unnest pairs each id with its own freshly
+// generated token, so every row gets a distinct code.
+app.post('/api/attendees/bulk-regenerate', session.requireStaff, requireUnlock('regen'), async (req, res) => {
+  const ids = bodyIds(req);
+  if (!ids.length) return res.status(400).json({ ok: false, error: 'no ids' });
+  try {
+    const tokens = ids.map(() => newToken());
+    const info = await query(
+      `UPDATE attendees AS a
+          SET token = t.token, email_sent_at = NULL, resent = false,
+              regen_count = a.regen_count + 1, regenerated_at = now()
+         FROM unnest($1::bigint[], $2::text[]) AS t(id, token)
+        WHERE a.id = t.id
+        RETURNING a.id, a.name, a.email`,
+      [ids, tokens]
+    );
+    await audit(
+      info.rows.map((r) => ({ action: 'regenerate', attendee_id: r.id, name: r.name, email: r.email, detail: 'bulk' })),
+      req.ip
+    );
+    res.json({ ok: true, updated: info.rowCount });
+  } catch (err) {
+    console.error('bulk-regenerate error:', err.message);
     res.status(500).json({ ok: false });
   }
 });
@@ -446,6 +575,21 @@ if (!config.sessionSecret) {
 }
 if (!config.staffPassword) {
   console.warn('WARNING: STAFF_PASSWORD is empty — staff will not be able to log in.');
+}
+
+// Summarize the organizer-password gate so misconfiguration is obvious in logs.
+{
+  const locked = Object.keys(config.locks).filter((k) => config.locks[k]);
+  if (!locked.length) {
+    console.log('Organizer lock: OFF — regen/add/delete/undo are open to any logged-in staff.');
+  } else if (!config.organizerPassword) {
+    console.warn(
+      `WARNING: these actions are LOCKED (${locked.join(', ')}) but ORGANIZER_PASSWORD is empty — `
+      + 'they are BLOCKED for everyone until you set it.'
+    );
+  } else {
+    console.log(`Organizer lock: ON for ${locked.join(', ')} (organizer password required); others open.`);
+  }
 }
 
 // ---------- startup ----------
