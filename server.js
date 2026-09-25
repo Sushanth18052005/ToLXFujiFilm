@@ -368,10 +368,22 @@ app.delete('/api/attendees/:id', session.requireStaff, requireUnlock('delete'), 
   if (!Number.isInteger(id)) return res.status(400).json({ ok: false, error: 'bad id' });
   try {
     await query('DELETE FROM scans WHERE attendee_id = $1', [id]);
-    const info = await query('DELETE FROM attendees WHERE id = $1 RETURNING name, email', [id]);
+    const info = await query(
+      `DELETE FROM attendees WHERE id = $1
+         RETURNING name, email, status,
+           to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at`,
+      [id]
+    );
     if (info.rowCount === 1) {
       const a = info.rows[0];
-      await audit([{ action: 'delete', attendee_id: id, name: a.name, email: a.email, detail: 'single' }], req.ip);
+      // Stamp the victim's state at delete time into the (append-only) audit detail.
+      // Deleting someone who had ALREADY ENTERED is the fingerprint of the delete+
+      // re-add seat-recycling trick, so the export can flag it. Past deletes logged
+      // before this change stay as plain 'single' — the prior status wasn't captured.
+      const detail = a.status === 'entered'
+        ? `single; was ENTERED (${a.entered_at || '?'} IST)`
+        : 'single';
+      await audit([{ action: 'delete', attendee_id: id, name: a.name, email: a.email, detail }], req.ip);
     }
     res.json({ ok: info.rowCount === 1 });
   } catch (err) {
@@ -416,9 +428,17 @@ app.post('/api/attendees/bulk-delete', session.requireStaff, requireUnlock('dele
   if (!ids.length) return res.status(400).json({ ok: false, error: 'no ids' });
   try {
     await query('DELETE FROM scans WHERE attendee_id = ANY($1::bigint[])', [ids]);
-    const info = await query('DELETE FROM attendees WHERE id = ANY($1::bigint[]) RETURNING id, name, email', [ids]);
+    const info = await query(
+      `DELETE FROM attendees WHERE id = ANY($1::bigint[])
+         RETURNING id, name, email, status,
+           to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at`,
+      [ids]
+    );
     await audit(
-      info.rows.map((r) => ({ action: 'delete', attendee_id: r.id, name: r.name, email: r.email, detail: 'bulk' })),
+      info.rows.map((r) => ({
+        action: 'delete', attendee_id: r.id, name: r.name, email: r.email,
+        detail: r.status === 'entered' ? `bulk; was ENTERED (${r.entered_at || '?'} IST)` : 'bulk',
+      })),
       req.ip
     );
     res.json({ ok: true, deleted: info.rowCount });
