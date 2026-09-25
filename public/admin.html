@@ -79,6 +79,11 @@
         <option value="import">Imported</option>
         <option value="manual">Added manually</option>
       </select>
+      <select id="fRegen" onchange="loadList()" style="flex:1;min-width:120px">
+        <option value="">Any regen status</option>
+        <option value="yes">Regenerated</option>
+        <option value="no">Not regenerated</option>
+      </select>
     </div>
 
     <div id="selbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
@@ -382,9 +387,11 @@
       const st = document.getElementById('fStatus').value;
       const em = document.getElementById('fEmailed').value;
       const sr = document.getElementById('fSource').value;
+      const rg = document.getElementById('fRegen').value;
       if (st) params.set('status', st);
       if (em) params.set('emailed', em);
       if (sr) params.set('source', sr);
+      if (rg) params.set('regen', rg);
       const r = await fetch('/api/attendees?' + params.toString());
       if (r.status === 401) return location.href = '/login';
       const rows = await r.json();

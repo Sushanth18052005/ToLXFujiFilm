@@ -266,6 +266,7 @@ app.get('/api/attendees', session.requireStaff, async (req, res) => {
   const status = String(req.query.status || '');
   const emailed = String(req.query.emailed || '');
   const source = String(req.query.source || '');
+  const regen = String(req.query.regen || '');
   const params = [q, q];
   const where = [`(lower(name) LIKE $1 OR lower(COALESCE(email,'')) LIKE $2)`];
   if (status === 'entered' || status === 'registered') {
@@ -280,6 +281,8 @@ app.get('/api/attendees', session.requireStaff, async (req, res) => {
     params.push(source);
     where.push(`source = $${params.length}`);
   }
+  if (regen === 'yes') where.push(`regen_count > 0`);
+  else if (regen === 'no') where.push(`regen_count = 0`);
   try {
     const { rows } = await query(
       `SELECT id, name, email, status, resent, regen_count,
