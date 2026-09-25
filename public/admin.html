@@ -401,6 +401,9 @@
         const enteredLine = a.entered_at
           ? `<div class="muted" style="font-size:12px">Entered ${esc(a.entered_at)} IST</div>`
           : '';
+        const regenBadge = a.regen_count > 0
+          ? `<span class="badge regen" title="QR regenerated ${a.regen_count}×${a.regenerated_at ? ' — last ' + esc(a.regenerated_at) + ' IST' : ''}">regen ×${a.regen_count}</span>`
+          : '';
         return `
         <div class="row">
           <div style="display:flex;align-items:center;gap:10px;min-width:0">
@@ -414,6 +417,7 @@
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
             ${emailBadge}
             <span class="badge ${a.status}">${a.status}</span>
+            ${regenBadge}
             ${a.status === 'entered' ? `<button class="ghost btn-sm" onclick="undo(${a.id})">Undo</button>` : ''}
             <button class="ghost btn-sm" onclick="regenQr(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Regen QR</button>
             <button class="ghost btn-sm" onclick="delAttendee(${a.id}, ${JSON.stringify(a.name).replace(/"/g, '&quot;')})">Delete</button>

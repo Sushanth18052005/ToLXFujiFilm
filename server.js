@@ -282,9 +282,10 @@ app.get('/api/attendees', session.requireStaff, async (req, res) => {
   }
   try {
     const { rows } = await query(
-      `SELECT id, name, email, status, resent,
+      `SELECT id, name, email, status, resent, regen_count,
          to_char(entered_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS entered_at,
-         to_char(email_sent_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS email_sent_at
+         to_char(email_sent_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS email_sent_at,
+         to_char(regenerated_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS') AS regenerated_at
        FROM attendees
        WHERE ${where.join(' AND ')}
        ORDER BY entered_at DESC NULLS LAST, name LIMIT 200`,
